@@ -2229,6 +2229,15 @@ namespace ICSharpCode.ILSpy.Properties {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to Scope search and analysis to this....
+        /// </summary>
+        public static string SetSearchAndAnalysisScope {
+            get {
+                return ResourceManager.GetString("SetSearchAndAnalysisScope", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to You must restart ILSpy for the change to take effect..
         /// </summary>
         public static string SettingsChangeRestartRequired {

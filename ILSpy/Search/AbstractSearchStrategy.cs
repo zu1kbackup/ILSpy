@@ -25,19 +25,6 @@ using ICSharpCode.Decompiler.Metadata;
 
 namespace ICSharpCode.ILSpy.Search
 {
-	struct SearchRequest
-	{
-		public SearchMode Mode;
-		public AssemblySearchKind AssemblySearchKind;
-		public MemberSearchKind MemberSearchKind;
-		public string[] Keywords;
-		public Regex RegEx;
-		public bool FullNameSearch;
-		public bool OmitGenerics;
-		public string InNamespace;
-		public string InAssembly;
-	}
-
 	abstract class AbstractSearchStrategy
 	{
 		protected readonly string[] searchTerm;
