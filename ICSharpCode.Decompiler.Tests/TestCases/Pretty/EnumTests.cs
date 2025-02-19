@@ -28,6 +28,26 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 			Item2
 		}
 
+		public enum OutOfOrderMembers
+		{
+			Item1 = 1,
+			Item0 = 0
+		}
+
+		public enum EnumSkippedItemTest
+		{
+			Item0 = 0,
+			Item2 = 2
+		}
+
+		public enum EnumDuplicateItemTest
+		{
+			Item0 = 0,
+			Item1 = 1,
+			Item2A = 2,
+			Item2B = 2
+		}
+
 		public enum LongBasedEnum : long
 		{
 			Item1,
@@ -58,11 +78,11 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 		[Flags]
 		public enum SimpleFlagsEnum
 		{
-			None = 0x0,
-			Item1 = 0x1,
-			Item2 = 0x2,
-			Item3 = 0x4,
-			All = 0x7
+			None = 0,
+			Item1 = 1,
+			Item2 = 2,
+			Item3 = 4,
+			All = 7
 		}
 
 		[Flags]

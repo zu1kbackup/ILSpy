@@ -25,6 +25,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection.Metadata;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -51,14 +52,17 @@ using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.CSharp.ProjectDecompiler;
 using ICSharpCode.Decompiler.Documentation;
 using ICSharpCode.Decompiler.TypeSystem;
+using ICSharpCode.ILSpy.AssemblyTree;
 using ICSharpCode.ILSpy.AvalonEdit;
 using ICSharpCode.ILSpy.Options;
 using ICSharpCode.ILSpy.Themes;
 using ICSharpCode.ILSpy.TreeNodes;
 using ICSharpCode.ILSpy.ViewModels;
+using ICSharpCode.ILSpyX;
 
 using Microsoft.Win32;
 
+using TomsToolbox.Composition;
 using TomsToolbox.Wpf;
 
 using ResourceKeys = ICSharpCode.ILSpy.Themes.ResourceKeys;
@@ -69,17 +73,23 @@ namespace ICSharpCode.ILSpy.TextView
 	/// Manages the TextEditor showing the decompiled code.
 	/// Contains all the threading logic that makes the decompiler work in the background.
 	/// </summary>
-	public sealed partial class DecompilerTextView : UserControl, IDisposable, IHaveState
+	public sealed partial class DecompilerTextView : UserControl, IHaveState, IProgress<DecompilationProgress>
 	{
+		readonly IExportProvider exportProvider;
+		readonly SettingsService settingsService;
+		readonly LanguageService languageService;
+		readonly MainWindow mainWindow;
 		readonly ReferenceElementGenerator referenceElementGenerator;
 		readonly UIElementGenerator uiElementGenerator;
 		readonly List<VisualLineElementGenerator?> activeCustomElementGenerators = new List<VisualLineElementGenerator?>();
 		readonly BracketHighlightRenderer bracketHighlightRenderer;
 		RichTextColorizer? activeRichTextColorizer;
+		RichTextModel? activeRichTextModel;
 		FoldingManager? foldingManager;
 		ILSpyTreeNode[]? decompiledNodes;
 		Uri? currentAddress;
 		string? currentTitle;
+		bool expandMemberDefinitions;
 
 		DefinitionLookup? definitionLookup;
 		TextSegmentCollection<ReferenceSegment>? references;
@@ -89,8 +99,13 @@ namespace ICSharpCode.ILSpy.TextView
 		readonly List<ITextMarker> localReferenceMarks = new List<ITextMarker>();
 
 		#region Constructor
-		public DecompilerTextView()
+		public DecompilerTextView(IExportProvider exportProvider)
 		{
+			this.exportProvider = exportProvider;
+			settingsService = exportProvider.GetExportedValue<SettingsService>();
+			languageService = exportProvider.GetExportedValue<LanguageService>();
+			mainWindow = exportProvider.GetExportedValue<MainWindow>();
+
 			RegisterHighlighting();
 
 			InitializeComponent();
@@ -108,9 +123,9 @@ namespace ICSharpCode.ILSpy.TextView
 			textEditor.TextArea.Caret.PositionChanged += HighlightBrackets;
 			textEditor.MouseMove += TextEditorMouseMove;
 			textEditor.MouseLeave += TextEditorMouseLeave;
-			textEditor.SetBinding(Control.FontFamilyProperty, new Binding { Source = DisplaySettingsPanel.CurrentDisplaySettings, Path = new PropertyPath("SelectedFont") });
-			textEditor.SetBinding(Control.FontSizeProperty, new Binding { Source = DisplaySettingsPanel.CurrentDisplaySettings, Path = new PropertyPath("SelectedFontSize") });
-			textEditor.SetBinding(TextEditor.WordWrapProperty, new Binding { Source = DisplaySettingsPanel.CurrentDisplaySettings, Path = new PropertyPath("EnableWordWrap") });
+			textEditor.SetBinding(Control.FontFamilyProperty, new Binding { Source = settingsService.DisplaySettings, Path = new PropertyPath("SelectedFont") });
+			textEditor.SetBinding(Control.FontSizeProperty, new Binding { Source = settingsService.DisplaySettings, Path = new PropertyPath("SelectedFontSize") });
+			textEditor.SetBinding(TextEditor.WordWrapProperty, new Binding { Source = settingsService.DisplaySettings, Path = new PropertyPath("EnableWordWrap") });
 
 			// disable Tab editing command (useless for read-only editor); allow using tab for focus navigation instead
 			RemoveEditCommand(EditingCommands.TabForward);
@@ -120,30 +135,35 @@ namespace ICSharpCode.ILSpy.TextView
 			textEditor.TextArea.TextView.BackgroundRenderers.Add(textMarkerService);
 			textEditor.TextArea.TextView.LineTransformers.Add(textMarkerService);
 			textEditor.ShowLineNumbers = true;
-			DisplaySettingsPanel.CurrentDisplaySettings.PropertyChanged += CurrentDisplaySettings_PropertyChanged;
+
+			MessageBus<SettingsChangedEventArgs>.Subscribers += Settings_Changed;
 
 			// SearchPanel
 			SearchPanel searchPanel = SearchPanel.Install(textEditor.TextArea);
-			searchPanel.RegisterCommands(Application.Current.MainWindow.CommandBindings);
+			searchPanel.RegisterCommands(mainWindow.CommandBindings);
+			searchPanel.SetResourceReference(SearchPanel.MarkerBrushProperty, ResourceKeys.SearchResultBackgroundBrush);
 			searchPanel.Loaded += (_, _) => {
-				// HACK: fix the hardcoded but misaligned margin of the search text box.
-				var textBox = searchPanel.VisualDescendants().OfType<TextBox>().FirstOrDefault();
+				// HACK: fix search text box
+				var textBox = searchPanel.Template.FindName("PART_searchTextBox", searchPanel) as TextBox;
 				if (textBox != null)
 				{
+					// the hardcoded but misaligned margin
 					textBox.Margin = new Thickness(3);
+					// the hardcoded height
+					textBox.Height = double.NaN;
 				}
 			};
 
 			ShowLineMargin();
 			SetHighlightCurrentLine();
 
-			// add marker service & margin
-			textEditor.TextArea.TextView.BackgroundRenderers.Add(textMarkerService);
-			textEditor.TextArea.TextView.LineTransformers.Add(textMarkerService);
-
 			ContextMenuProvider.Add(this);
 
 			textEditor.TextArea.TextView.SetResourceReference(ICSharpCode.AvalonEdit.Rendering.TextView.LinkTextForegroundBrushProperty, ResourceKeys.LinkTextForegroundBrush);
+			textEditor.TextArea.TextView.SetResourceReference(ICSharpCode.AvalonEdit.Rendering.TextView.CurrentLineBackgroundProperty, ResourceKeys.CurrentLineBackgroundBrush);
+			textEditor.TextArea.TextView.SetResourceReference(ICSharpCode.AvalonEdit.Rendering.TextView.CurrentLineBorderProperty, ResourceKeys.CurrentLineBorderPen);
+
+			DataObject.AddSettingDataHandler(textEditor.TextArea, OnSettingData);
 
 			this.DataContextChanged += DecompilerTextView_DataContextChanged;
 		}
@@ -152,7 +172,7 @@ namespace ICSharpCode.ILSpy.TextView
 		{
 			if (this.DataContext is PaneModel model)
 			{
-				model.Title = currentTitle ?? ILSpy.Properties.Resources.NewTab;
+				model.Title = currentTitle ?? ILSpy.Properties.Resources.Decompiling;
 			}
 		}
 
@@ -170,15 +190,24 @@ namespace ICSharpCode.ILSpy.TextView
 
 		#region Line margin
 
-		void CurrentDisplaySettings_PropertyChanged(object sender, PropertyChangedEventArgs e)
+		private void Settings_Changed(object? sender, SettingsChangedEventArgs e)
 		{
-			if (e.PropertyName == nameof(DisplaySettings.ShowLineNumbers))
+			Settings_PropertyChanged(sender, e);
+		}
+
+		private void Settings_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+		{
+			if (sender is not DisplaySettings)
+				return;
+
+			switch (e.PropertyName)
 			{
-				ShowLineMargin();
-			}
-			else if (e.PropertyName == nameof(DisplaySettings.HighlightCurrentLine))
-			{
-				SetHighlightCurrentLine();
+				case nameof(DisplaySettings.ShowLineNumbers):
+					ShowLineMargin();
+					break;
+				case nameof(DisplaySettings.HighlightCurrentLine):
+					SetHighlightCurrentLine();
+					break;
 			}
 		}
 
@@ -188,14 +217,14 @@ namespace ICSharpCode.ILSpy.TextView
 			{
 				if (margin is LineNumberMargin || margin is System.Windows.Shapes.Line)
 				{
-					margin.Visibility = DisplaySettingsPanel.CurrentDisplaySettings.ShowLineNumbers ? Visibility.Visible : Visibility.Collapsed;
+					margin.Visibility = settingsService.DisplaySettings.ShowLineNumbers ? Visibility.Visible : Visibility.Collapsed;
 				}
 			}
 		}
 
 		void SetHighlightCurrentLine()
 		{
-			textEditor.Options.HighlightCurrentLine = DisplaySettingsPanel.CurrentDisplaySettings.HighlightCurrentLine;
+			textEditor.Options.HighlightCurrentLine = settingsService.DisplaySettings.HighlightCurrentLine;
 		}
 
 		#endregion
@@ -216,7 +245,7 @@ namespace ICSharpCode.ILSpy.TextView
 			int offset = textEditor.Document.GetOffset(position.Value.Location);
 			if (referenceElementGenerator.References == null)
 				return;
-			ReferenceSegment seg = referenceElementGenerator.References.FindSegmentsContaining(offset).FirstOrDefault();
+			ReferenceSegment? seg = referenceElementGenerator.References.FindSegmentsContaining(offset).FirstOrDefault();
 			if (seg == null)
 				return;
 			object? content = GenerateTooltip(seg);
@@ -229,6 +258,8 @@ namespace ICSharpCode.ILSpy.TextView
 				{
 					var popupPosition = GetPopupPosition(e);
 					popupToolTip.Closed += ToolTipClosed;
+					popupToolTip.Placement = PlacementMode.Relative;
+					popupToolTip.PlacementTarget = this;
 					popupToolTip.HorizontalOffset = popupPosition.X;
 					popupToolTip.VerticalOffset = popupPosition.Y;
 					popupToolTip.StaysOpen = true;  // We will close it ourselves
@@ -280,23 +311,19 @@ namespace ICSharpCode.ILSpy.TextView
 		Point GetPopupPosition(MouseEventArgs mouseArgs)
 		{
 			Point mousePos = mouseArgs.GetPosition(this);
-			Point positionInPixels;
 			// align Popup with line bottom
 			TextViewPosition? logicalPos = textEditor.GetPositionFromPoint(mousePos);
 			if (logicalPos.HasValue)
 			{
 				var textView = textEditor.TextArea.TextView;
-				positionInPixels =
-					textView.PointToScreen(
-						textView.GetVisualPosition(logicalPos.Value, VisualYPosition.LineBottom) - textView.ScrollOffset);
-				positionInPixels.X -= 4;
+				return textView.GetVisualPosition(logicalPos.Value, VisualYPosition.LineBottom)
+					- textView.ScrollOffset
+					+ new Vector(-4, 0);
 			}
 			else
 			{
-				positionInPixels = PointToScreen(mousePos + new Vector(-4, 6));
+				return mousePos + new Vector(-4, 6);
 			}
-			// use device independent units, because Popup Left/Top are in independent units
-			return positionInPixels.TransformFromDevice(this);
 		}
 
 		void TextViewMouseHoverStopped(object sender, MouseEventArgs e)
@@ -363,7 +390,7 @@ namespace ICSharpCode.ILSpy.TextView
 			TryCloseExistingPopup(true);
 		}
 
-		void ToolTipClosed(object sender, EventArgs e)
+		void ToolTipClosed(object? sender, EventArgs e)
 		{
 			if (toolTip == sender)
 			{
@@ -373,17 +400,22 @@ namespace ICSharpCode.ILSpy.TextView
 			{
 				// Because popupToolTip instances are created by the tooltip provider,
 				// they might be reused; so we should detach the event handler
-				popupToolTip.Closed -= ToolTipClosed;
+				if (popupToolTip != null)
+				{
+					popupToolTip.Closed -= ToolTipClosed;
+				}
 				popupToolTip = null;
 			}
 		}
 
 		object? GenerateTooltip(ReferenceSegment segment)
 		{
+			var fontSize = settingsService.DisplaySettings.SelectedFontSize;
+
 			if (segment.Reference is ICSharpCode.Decompiler.Disassembler.OpCodeInfo code)
 			{
 				XmlDocumentationProvider docProvider = XmlDocLoader.MscorlibDocumentation;
-				DocumentationUIBuilder renderer = new DocumentationUIBuilder(new CSharpAmbience(), MainWindow.Instance.CurrentLanguage.SyntaxHighlighting);
+				DocumentationUIBuilder renderer = new DocumentationUIBuilder(new CSharpAmbience(), languageService.Language.SyntaxHighlighting, settingsService.DisplaySettings, mainWindow);
 				renderer.AddSignatureBlock($"{code.Name} (0x{code.Code:x})");
 				if (docProvider != null)
 				{
@@ -393,18 +425,19 @@ namespace ICSharpCode.ILSpy.TextView
 						renderer.AddXmlDocumentation(documentation, null, null);
 					}
 				}
-				return new FlowDocumentTooltip(renderer.CreateDocument());
+				return new FlowDocumentTooltip(renderer.CreateDocument(), fontSize, mainWindow.ActualWidth);
 			}
 			else if (segment.Reference is IEntity entity)
 			{
 				var document = CreateTooltipForEntity(entity);
 				if (document == null)
 					return null;
-				return new FlowDocumentTooltip(document);
+				return new FlowDocumentTooltip(document, fontSize, mainWindow.ActualWidth);
 			}
 			else if (segment.Reference is EntityReference unresolvedEntity)
 			{
-				var module = unresolvedEntity.ResolveAssembly(MainWindow.Instance.CurrentAssemblyList);
+				var assemblyList = exportProvider.GetExportedValue<AssemblyList>();
+				var module = unresolvedEntity.ResolveAssembly(assemblyList);
 				if (module == null)
 					return null;
 				var typeSystem = new DecompilerTypeSystem(module,
@@ -421,7 +454,7 @@ namespace ICSharpCode.ILSpy.TextView
 					var document = CreateTooltipForEntity(resolved);
 					if (document == null)
 						return null;
-					return new FlowDocumentTooltip(document);
+					return new FlowDocumentTooltip(document, fontSize, mainWindow.ActualWidth);
 				}
 				catch (BadImageFormatException)
 				{
@@ -431,17 +464,22 @@ namespace ICSharpCode.ILSpy.TextView
 			return null;
 		}
 
-		static FlowDocument? CreateTooltipForEntity(IEntity resolved)
+		FlowDocument? CreateTooltipForEntity(IEntity resolved)
 		{
-			Language currentLanguage = MainWindow.Instance.CurrentLanguage;
-			DocumentationUIBuilder renderer = new DocumentationUIBuilder(new CSharpAmbience(), currentLanguage.SyntaxHighlighting);
+			Language currentLanguage = languageService.Language;
+			DocumentationUIBuilder renderer = new DocumentationUIBuilder(new CSharpAmbience(), currentLanguage.SyntaxHighlighting, settingsService.DisplaySettings, mainWindow);
 			RichText richText = currentLanguage.GetRichTextTooltip(resolved);
+			if (richText == null)
+			{
+				return null;
+			}
+
 			renderer.AddSignatureBlock(richText.Text, richText.ToRichTextModel());
 			try
 			{
-				if (resolved.ParentModule == null || resolved.ParentModule.PEFile == null)
+				if (resolved.ParentModule == null || resolved.ParentModule.MetadataFile == null)
 					return null;
-				var docProvider = XmlDocLoader.LoadDocumentation(resolved.ParentModule.PEFile);
+				var docProvider = XmlDocLoader.LoadDocumentation(resolved.ParentModule.MetadataFile);
 				if (docProvider != null)
 				{
 					string documentation = docProvider.GetDocumentation(resolved.GetIdString());
@@ -459,7 +497,8 @@ namespace ICSharpCode.ILSpy.TextView
 
 			IEntity? ResolveReference(string idString)
 			{
-				return MainWindow.FindEntityInRelevantAssemblies(idString, MainWindow.Instance.CurrentAssemblyList.GetAssemblies());
+				var assemblyList = exportProvider.GetExportedValue<AssemblyList>();
+				return AssemblyTreeModel.FindEntityInRelevantAssemblies(idString, assemblyList.GetAssemblies());
 			}
 		}
 
@@ -467,15 +506,14 @@ namespace ICSharpCode.ILSpy.TextView
 		{
 			readonly FlowDocumentScrollViewer viewer;
 
-			public FlowDocumentTooltip(FlowDocument document)
+			public FlowDocumentTooltip(FlowDocument document, double fontSize, double maxWith)
 			{
 				TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
-				double fontSize = DisplaySettingsPanel.CurrentDisplaySettings.SelectedFontSize;
-				viewer = new FlowDocumentScrollViewer() {
+				viewer = new() {
 					Width = document.MinPageWidth + fontSize * 5,
-					MaxWidth = MainWindow.Instance.ActualWidth
+					MaxWidth = maxWith,
+					Document = document
 				};
-				viewer.Document = document;
 				Border border = new Border {
 					BorderThickness = new Thickness(1),
 					MaxHeight = 400,
@@ -515,11 +553,11 @@ namespace ICSharpCode.ILSpy.TextView
 		#endregion
 
 		#region Highlight brackets
-		void HighlightBrackets(object sender, EventArgs e)
+		void HighlightBrackets(object? sender, EventArgs e)
 		{
-			if (DisplaySettingsPanel.CurrentDisplaySettings.HighlightMatchingBraces)
+			if (settingsService.DisplaySettings.HighlightMatchingBraces)
 			{
-				var result = MainWindow.Instance.CurrentLanguage.BracketSearcher.SearchBracket(textEditor.Document, textEditor.CaretOffset);
+				var result = languageService.Language.BracketSearcher.SearchBracket(textEditor.Document, textEditor.CaretOffset);
 				bracketHighlightRenderer.SetHighlight(result);
 			}
 			else
@@ -530,18 +568,26 @@ namespace ICSharpCode.ILSpy.TextView
 		#endregion
 
 		#region RunWithCancellation
-		/// <summary>
-		/// Switches the GUI into "waiting" mode, then calls <paramref name="taskCreation"/> to create
-		/// the task.
-		/// When the task completes without being cancelled, the <paramref name="taskCompleted"/>
-		/// callback is called on the GUI thread.
-		/// When the task is cancelled before completing, the callback is not called; and any result
-		/// of the task (including exceptions) are ignored.
-		/// </summary>
-		[Obsolete("RunWithCancellation(taskCreation).ContinueWith(taskCompleted) instead")]
-		public void RunWithCancellation<T>(Func<CancellationToken, Task<T>> taskCreation, Action<Task<T>> taskCompleted)
+		public void Report(DecompilationProgress value)
 		{
-			RunWithCancellation(taskCreation).ContinueWith(taskCompleted, CancellationToken.None, TaskContinuationOptions.NotOnCanceled, TaskScheduler.FromCurrentSynchronizationContext());
+			double v = (double)value.UnitsCompleted / value.TotalUnits;
+			Dispatcher.BeginInvoke(DispatcherPriority.Normal, delegate {
+				progressBar.IsIndeterminate = !double.IsFinite(v);
+				progressBar.Value = v * 100.0;
+				progressTitle.Text = !string.IsNullOrWhiteSpace(value.Title) ? value.Title : Properties.Resources.Decompiling;
+				progressText.Text = value.Status;
+				progressText.Visibility = !string.IsNullOrWhiteSpace(progressText.Text) ? Visibility.Visible : Visibility.Collapsed;
+				var taskBar = mainWindow.TaskbarItemInfo;
+				if (taskBar != null)
+				{
+					taskBar.ProgressState = System.Windows.Shell.TaskbarItemProgressState.Normal;
+					taskBar.ProgressValue = v;
+				}
+				if (this.DataContext is TabPageModel model)
+				{
+					model.Title = progressTitle.Text;
+				}
+			});
 		}
 
 		/// <summary>
@@ -549,16 +595,19 @@ namespace ICSharpCode.ILSpy.TextView
 		/// the task.
 		/// If another task is started before the previous task finishes running, the previous task is cancelled.
 		/// </summary>
-		public Task<T> RunWithCancellation<T>(Func<CancellationToken, Task<T>> taskCreation)
+		public Task<T> RunWithCancellation<T>(Func<CancellationToken, Task<T>> taskCreation, string? progressTitle = null)
 		{
 			if (waitAdorner.Visibility != Visibility.Visible)
 			{
 				waitAdorner.Visibility = Visibility.Visible;
 				// Work around a WPF bug by setting IsIndeterminate only while the progress bar is visible.
 				// https://github.com/icsharpcode/ILSpy/issues/593
+				this.progressTitle.Text = progressTitle == null ? Properties.Resources.Decompiling : progressTitle;
 				progressBar.IsIndeterminate = true;
+				progressText.Text = null;
+				progressText.Visibility = Visibility.Collapsed;
 				waitAdorner.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, new Duration(TimeSpan.FromSeconds(0.5)), FillBehavior.Stop));
-				var taskBar = MainWindow.Instance.TaskbarItemInfo;
+				var taskBar = mainWindow.TaskbarItemInfo;
 				if (taskBar != null)
 				{
 					taskBar.ProgressState = System.Windows.Shell.TaskbarItemProgressState.Indeterminate;
@@ -569,7 +618,9 @@ namespace ICSharpCode.ILSpy.TextView
 			currentCancellationTokenSource = myCancellationTokenSource;
 			// cancel the previous only after current was set to the new one (avoid that the old one still finishes successfully)
 			if (previousCancellationTokenSource != null)
+			{
 				previousCancellationTokenSource.Cancel();
+			}
 
 			var tcs = new TaskCompletionSource<T>();
 			Task<T> task;
@@ -593,7 +644,9 @@ namespace ICSharpCode.ILSpy.TextView
 						currentCancellationTokenSource = null;
 						waitAdorner.Visibility = Visibility.Collapsed;
 						progressBar.IsIndeterminate = false;
-						var taskBar = MainWindow.Instance.TaskbarItemInfo;
+						progressText.Text = null;
+						progressText.Visibility = Visibility.Collapsed;
+						var taskBar = mainWindow.TaskbarItemInfo;
 						if (taskBar != null)
 						{
 							taskBar.ProgressState = System.Windows.Shell.TaskbarItemProgressState.None;
@@ -665,8 +718,8 @@ namespace ICSharpCode.ILSpy.TextView
 				textOutput.Title = string.Join(", ", nodes.Select(n => n.Text));
 			}
 
-			ShowOutput(textOutput, highlighting);
 			decompiledNodes = nodes;
+			ShowOutput(textOutput, highlighting);
 		}
 
 		/// <summary>
@@ -692,10 +745,12 @@ namespace ICSharpCode.ILSpy.TextView
 			textEditor.SyntaxHighlighting = highlighting;
 			textEditor.Options.EnableEmailHyperlinks = textOutput.EnableHyperlinks;
 			textEditor.Options.EnableHyperlinks = textOutput.EnableHyperlinks;
+			activeRichTextModel = null;
 			if (activeRichTextColorizer != null)
 				textEditor.TextArea.TextView.LineTransformers.Remove(activeRichTextColorizer);
 			if (textOutput.HighlightingModel != null)
 			{
+				activeRichTextModel = textOutput.HighlightingModel;
 				activeRichTextColorizer = new RichTextColorizer(textOutput.HighlightingModel);
 				textEditor.TextArea.TextView.LineTransformers.Insert(highlighting == null ? 0 : 1, activeRichTextColorizer);
 			}
@@ -722,7 +777,7 @@ namespace ICSharpCode.ILSpy.TextView
 			{
 				if (state != null)
 				{
-					state.RestoreFoldings(textOutput.Foldings);
+					state.RestoreFoldings(textOutput.Foldings, settingsService.DisplaySettings.ExpandMemberDefinitions);
 					textEditor.ScrollToVerticalOffset(state.VerticalOffset);
 					textEditor.ScrollToHorizontalOffset(state.HorizontalOffset);
 				}
@@ -746,6 +801,7 @@ namespace ICSharpCode.ILSpy.TextView
 			}
 			currentAddress = textOutput.Address;
 			currentTitle = textOutput.Title;
+			expandMemberDefinitions = settingsService.DisplaySettings.ExpandMemberDefinitions;
 		}
 		#endregion
 
@@ -815,12 +871,13 @@ namespace ICSharpCode.ILSpy.TextView
 			return RunWithCancellation(
 				delegate (CancellationToken ct) { // creation of the background task
 					context.Options.CancellationToken = ct;
+					context.Options.Progress = this;
+					decompiledNodes = context.TreeNodes;
 					return DecompileAsync(context, outputLengthLimit);
 				})
 			.Then(
 				delegate (AvalonEditTextOutput textOutput) { // handling the result
 					ShowOutput(textOutput, context.Language.SyntaxHighlighting, context.Options.TextViewState);
-					decompiledNodes = context.TreeNodes;
 				})
 			.Catch<Exception>(exception => {
 				textEditor.SyntaxHighlighting = null;
@@ -835,7 +892,6 @@ namespace ICSharpCode.ILSpy.TextView
 					output.WriteLine(exception.ToString());
 				}
 				ShowOutput(output);
-				decompiledNodes = context.TreeNodes;
 			});
 		}
 
@@ -968,7 +1024,7 @@ namespace ICSharpCode.ILSpy.TextView
 					return;
 				}
 			}
-			MainWindow.Instance.JumpToReference(reference, openInNewTab);
+			MessageBus.Send(this, new NavigateToReferenceEventArgs(reference, openInNewTab));
 		}
 
 		Point? mouseDownPos;
@@ -1035,7 +1091,7 @@ namespace ICSharpCode.ILSpy.TextView
 			SaveFileDialog dlg = new SaveFileDialog();
 			dlg.DefaultExt = language.FileExtension;
 			dlg.Filter = language.Name + "|*" + language.FileExtension + Properties.Resources.AllFiles;
-			dlg.FileName = CleanUpName(treeNodes.First().ToString()) + language.FileExtension;
+			dlg.FileName = WholeProjectDecompiler.CleanUpFileName(treeNodes.First().ToString()) + language.FileExtension;
 			if (dlg.ShowDialog() == true)
 			{
 				SaveToDisk(new DecompilationContext(language, treeNodes.ToArray(), options), dlg.FileName);
@@ -1079,6 +1135,7 @@ namespace ICSharpCode.ILSpy.TextView
 					{
 						bool originalProjectFormatSetting = context.Options.DecompilerSettings.UseSdkStyleProjectFormat;
 						context.Options.EscapeInvalidIdentifiers = true;
+						context.Options.Progress = this;
 						AvalonEditTextOutput output = new AvalonEditTextOutput {
 							EnableHyperlinks = true,
 							Title = string.Join(", ", context.TreeNodes.Select(n => n.Text))
@@ -1150,13 +1207,57 @@ namespace ICSharpCode.ILSpy.TextView
 			thread.Start();
 			return tcs.Task;
 		}
+		#endregion
 
-		/// <summary>
-		/// Cleans up a node name for use as a file name.
-		/// </summary>
-		internal static string CleanUpName(string text)
+		#region Clipboard
+		private void OnSettingData(object sender, DataObjectSettingDataEventArgs e)
 		{
-			return WholeProjectDecompiler.CleanUpFileName(text);
+			if (e.Format == DataFormats.Html && e.DataObject is DataObject dataObject)
+			{
+				e.CancelCommand();
+				HtmlClipboard.SetHtml(dataObject, CreateHtmlFragmentFromSelection());
+			}
+		}
+
+		private string CreateHtmlFragmentFromSelection()
+		{
+			var options = new HtmlOptions(textEditor.TextArea.Options);
+			var highlighter = textEditor.TextArea.GetService(typeof(IHighlighter)) as IHighlighter;
+			var html = new StringBuilder();
+
+			foreach (var segment in textEditor.TextArea.Selection.Segments)
+			{
+				var line = textEditor.Document.GetLineByOffset(segment.StartOffset);
+
+				while (line != null && line.Offset < segment.EndOffset)
+				{
+					if (html.Length > 0)
+						html.AppendLine("<br>");
+
+					var s = GetOverlap(segment, line);
+					var highlightedLine = highlighter?.HighlightLine(line.LineNumber) ?? new HighlightedLine(textEditor.Document, line);
+
+					if (activeRichTextModel is not null)
+					{
+						var richTextHighlightedLine = new HighlightedLine(textEditor.Document, line);
+						foreach (HighlightedSection richTextSection in activeRichTextModel.GetHighlightedSections(s.Offset, s.Length))
+							richTextHighlightedLine.Sections.Add(richTextSection);
+						highlightedLine.MergeWith(richTextHighlightedLine);
+					}
+
+					html.Append(highlightedLine.ToHtml(s.Offset, s.Offset + s.Length, options));
+					line = line.NextLine;
+				}
+			}
+
+			return html.ToString();
+
+			static (int Offset, int Length) GetOverlap(ISegment segment1, ISegment segment2)
+			{
+				int start = Math.Max(segment1.Offset, segment2.Offset);
+				int end = Math.Min(segment1.EndOffset, segment2.EndOffset);
+				return (start, end - start);
+			}
 		}
 		#endregion
 
@@ -1192,6 +1293,7 @@ namespace ICSharpCode.ILSpy.TextView
 				state.SaveFoldingsState(foldingManager.AllFoldings);
 			state.VerticalOffset = textEditor.VerticalOffset;
 			state.HorizontalOffset = textEditor.HorizontalOffset;
+			state.ExpandMemberDefinitions = expandMemberDefinitions;
 			state.DecompiledNodes = decompiledNodes == null ? null : new HashSet<ILSpyTreeNode>(decompiledNodes);
 			state.ViewedUri = currentAddress;
 			return state;
@@ -1205,12 +1307,6 @@ namespace ICSharpCode.ILSpy.TextView
 			HighlightingManager.Instance.RegisterHighlighting("C#", new[] { ".cs" }, "CSharp-Mode");
 			HighlightingManager.Instance.RegisterHighlighting("Asm", new[] { ".s", ".asm" }, "Asm-Mode");
 			HighlightingManager.Instance.RegisterHighlighting("xml", new[] { ".xml", ".baml" }, "XML-Mode");
-		}
-
-
-		public void Dispose()
-		{
-			DisplaySettingsPanel.CurrentDisplaySettings.PropertyChanged -= CurrentDisplaySettings_PropertyChanged;
 		}
 
 		#region Unfold
@@ -1257,29 +1353,72 @@ namespace ICSharpCode.ILSpy.TextView
 		{
 			return other != null
 				&& ViewedUri == other.ViewedUri
-				&& (DecompiledNodes == other.DecompiledNodes || DecompiledNodes?.SetEquals(other.DecompiledNodes) == true);
+				&& NullSafeSetEquals(DecompiledNodes, other.DecompiledNodes);
+
+			static bool NullSafeSetEquals(HashSet<ILSpyTreeNode>? a, HashSet<ILSpyTreeNode>? b)
+			{
+				if (a == b)
+					return true;
+				if (a == null || b == null)
+					return false;
+				return a.SetEquals(b);
+			}
 		}
 	}
 
 	public class DecompilerTextViewState : ViewState
 	{
-		private List<Tuple<int, int>>? ExpandedFoldings;
+		private List<(int StartOffset, int EndOffset)>? ExpandedFoldings;
 		private int FoldingsChecksum;
+		public bool ExpandMemberDefinitions;
 		public double VerticalOffset;
 		public double HorizontalOffset;
 
 		public void SaveFoldingsState(IEnumerable<FoldingSection> foldings)
 		{
-			ExpandedFoldings = foldings.Where(f => !f.IsFolded).Select(f => Tuple.Create(f.StartOffset, f.EndOffset)).ToList();
-			FoldingsChecksum = unchecked(foldings.Select(f => f.StartOffset * 3 - f.EndOffset).DefaultIfEmpty().Aggregate((a, b) => a + b));
+			ExpandedFoldings = foldings.Where(f => !f.IsFolded)
+				.Select(f => (f.StartOffset, f.EndOffset)).ToList();
+			FoldingsChecksum = unchecked(foldings.Select(f => f.StartOffset * 3 - f.EndOffset)
+				.DefaultIfEmpty()
+				.Aggregate((a, b) => a + b));
 		}
 
-		internal void RestoreFoldings(List<NewFolding> list)
+		internal void RestoreFoldings(List<NewFolding> list, bool expandMemberDefinitions)
 		{
-			var checksum = unchecked(list.Select(f => f.StartOffset * 3 - f.EndOffset).DefaultIfEmpty().Aggregate((a, b) => a + b));
+			if (ExpandedFoldings == null)
+				return;
+			var checksum = unchecked(list.Select(f => f.StartOffset * 3 - f.EndOffset)
+				.DefaultIfEmpty()
+				.Aggregate((a, b) => a + b));
 			if (FoldingsChecksum == checksum)
+			{
 				foreach (var folding in list)
-					folding.DefaultClosed = !ExpandedFoldings.Any(f => f.Item1 == folding.StartOffset && f.Item2 == folding.EndOffset);
+				{
+					bool wasExpanded = ExpandedFoldings.Any(
+						f => f.StartOffset == folding.StartOffset
+							&& f.EndOffset == folding.EndOffset
+					);
+					bool isExpanded = !folding.DefaultClosed;
+					// State of the folding was changed
+					if (wasExpanded != isExpanded)
+					{
+						// The "ExpandMemberDefinitions" setting was not changed
+						if (expandMemberDefinitions == ExpandMemberDefinitions)
+						{
+							// restore fold state
+							folding.DefaultClosed = !wasExpanded;
+						}
+						else
+						{
+							// only restore fold state if fold was not a definition
+							if (!folding.IsDefinition)
+							{
+								folding.DefaultClosed = !wasExpanded;
+							}
+						}
+					}
+				}
+			}
 		}
 
 		public override bool Equals(ViewState? other)
@@ -1303,24 +1442,26 @@ namespace ICSharpCode.ILSpy.TextView
 			string[] extensions,
 			string resourceName)
 		{
-			if (ThemeManager.Current.IsDarkMode)
+			Stream? resourceStream = typeof(DecompilerTextView).Assembly
+				.GetManifestResourceStream(typeof(DecompilerTextView), resourceName + ".xshd");
+
+			if (resourceStream != null)
 			{
-				resourceName += "-Dark";
-			}
+				IHighlightingDefinition highlightingDefinition;
 
-			resourceName += ".xshd";
+				using (resourceStream)
+				using (XmlTextReader reader = new XmlTextReader(resourceStream))
+				{
+					highlightingDefinition = HighlightingLoader.Load(reader, manager);
+				}
 
-			manager.RegisterHighlighting(
+				manager.RegisterHighlighting(
 				name, extensions,
 				delegate {
-					using (Stream s = typeof(DecompilerTextView).Assembly.GetManifestResourceStream(typeof(DecompilerTextView), resourceName))
-					{
-						using (XmlTextReader reader = new XmlTextReader(s))
-						{
-							return HighlightingLoader.Load(reader, manager);
-						}
-					}
+					ThemeManager.Current.ApplyHighlightingColors(highlightingDefinition);
+					return highlightingDefinition;
 				});
+			}
 		}
 	}
 }

@@ -135,7 +135,7 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		}
 		#endregion
 
-		#region IsOpen / IsUnbound / IsKnownType
+		#region IsOpen / IsUnbound / IsUnmanagedType / IsKnownType
 		sealed class TypeClassificationVisitor : TypeVisitor
 		{
 			internal bool isOpen;
@@ -221,6 +221,92 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		}
 
 		/// <summary>
+		/// Gets whether the type is considered unmanaged.
+		/// </summary>
+		/// <remarks>
+		/// The C# 6.0 spec lists the following criteria: An unmanaged type is one of the following
+		/// * sbyte, byte, short, ushort, int, uint, long, ulong, char, float, double, decimal, or bool
+		/// * any enum type
+		/// * any pointer type
+		/// * any user-defined struct type that is not a constructed (= generic) type and contains fields of unmanaged types only.
+		/// 
+		/// C# 8.0 removes the restriction that constructed (= generic) types are not considered unmanaged types.
+		/// </remarks>
+		public static bool IsUnmanagedType(this IType type, bool allowGenerics)
+		{
+			HashSet<IType> types = null;
+			return IsUnmanagedTypeInternal(type);
+
+			bool IsUnmanagedTypeInternal(IType type)
+			{
+				if (type.Kind is TypeKind.Enum or TypeKind.Pointer or TypeKind.FunctionPointer or TypeKind.NInt or TypeKind.NUInt)
+				{
+					return true;
+				}
+				if (type is ITypeParameter tp)
+				{
+					return tp.HasUnmanagedConstraint;
+				}
+				var def = type.GetDefinition();
+				if (def == null)
+				{
+					return false;
+				}
+				switch (def.KnownTypeCode)
+				{
+					case KnownTypeCode.Void:
+					case KnownTypeCode.Boolean:
+					case KnownTypeCode.Char:
+					case KnownTypeCode.SByte:
+					case KnownTypeCode.Byte:
+					case KnownTypeCode.Int16:
+					case KnownTypeCode.UInt16:
+					case KnownTypeCode.Int32:
+					case KnownTypeCode.UInt32:
+					case KnownTypeCode.Int64:
+					case KnownTypeCode.UInt64:
+					case KnownTypeCode.Decimal:
+					case KnownTypeCode.Single:
+					case KnownTypeCode.Double:
+					case KnownTypeCode.IntPtr:
+					case KnownTypeCode.UIntPtr:
+					case KnownTypeCode.TypedReference:
+						//case KnownTypeCode.ArgIterator:
+						//case KnownTypeCode.RuntimeArgumentHandle:
+						return true;
+				}
+				if (type.Kind == TypeKind.Struct)
+				{
+					if (!allowGenerics && def.TypeParameterCount > 0)
+					{
+						return false;
+					}
+					if (types == null)
+					{
+						types = new HashSet<IType>();
+					}
+					types.Add(type);
+					foreach (var f in type.GetFields(f => !f.IsStatic))
+					{
+						if (types.Contains(f.Type))
+						{
+							types.Remove(type);
+							return false;
+						}
+						if (!IsUnmanagedTypeInternal(f.Type))
+						{
+							types.Remove(type);
+							return false;
+						}
+					}
+					types.Remove(type);
+					return true;
+				}
+				return false;
+			}
+		}
+
+		/// <summary>
 		/// Gets whether the type is the specified known type.
 		/// For generic known types, this returns true for any parameterization of the type (and also for the definition itself).
 		/// </summary>
@@ -286,6 +372,15 @@ namespace ICSharpCode.Decompiler.TypeSystem
 				ty = mt.ElementType;
 			}
 			return ty;
+		}
+
+		public static IType UnwrapByRef(this IType type)
+		{
+			if (type is ByReferenceType byRef)
+			{
+				type = byRef.ElementType;
+			}
+			return type;
 		}
 
 		public static bool HasReadonlyModifier(this IMethod accessor)
@@ -399,7 +494,7 @@ namespace ICSharpCode.Decompiler.TypeSystem
 
 		#region IEntity.GetAttribute
 		/// <summary>
-		/// Gets whether the entity has an attribute of the specified attribute type (or derived attribute types).
+		/// Gets whether the entity has an attribute of the specified attribute type.
 		/// </summary>
 		/// <param name="entity">The entity on which the attributes are declared.</param>
 		/// <param name="attributeType">The attribute type to look for.</param>
@@ -408,13 +503,16 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		/// (if the given <paramref name="entity"/> in an <c>override</c>)
 		/// should be returned.
 		/// </param>
-		public static bool HasAttribute(this IEntity entity, KnownAttribute attributeType, bool inherit = false)
+		public static bool HasAttribute(this IEntity entity, KnownAttribute attributeType, bool inherit)
 		{
+			if (!inherit)
+				return entity.HasAttribute(attributeType);
+
 			return GetAttribute(entity, attributeType, inherit) != null;
 		}
 
 		/// <summary>
-		/// Gets the attribute of the specified attribute type (or derived attribute types).
+		/// Gets the attribute of the specified attribute type.
 		/// </summary>
 		/// <param name="entity">The entity on which the attributes are declared.</param>
 		/// <param name="attributeType">The attribute type to look for.</param>
@@ -428,9 +526,27 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		/// If inherit is true, an from the entity itself will be returned if possible;
 		/// and the base entity will only be searched if none exists.
 		/// </returns>
-		public static IAttribute GetAttribute(this IEntity entity, KnownAttribute attributeType, bool inherit = false)
+		public static IAttribute GetAttribute(this IEntity entity, KnownAttribute attributeType, bool inherit)
 		{
-			return GetAttributes(entity, inherit).FirstOrDefault(a => a.AttributeType.IsKnownType(attributeType));
+			if (inherit)
+			{
+				if (entity is ITypeDefinition td)
+				{
+					return InheritanceHelper.GetAttribute(td, attributeType);
+				}
+				else if (entity is IMember m)
+				{
+					return InheritanceHelper.GetAttribute(m, attributeType);
+				}
+				else
+				{
+					throw new NotSupportedException("Unknown entity type");
+				}
+			}
+			else
+			{
+				return entity.GetAttribute(attributeType);
+			}
 		}
 
 		/// <summary>
@@ -473,7 +589,7 @@ namespace ICSharpCode.Decompiler.TypeSystem
 
 		#region IParameter.GetAttribute
 		/// <summary>
-		/// Gets whether the parameter has an attribute of the specified attribute type (or derived attribute types).
+		/// Gets whether the parameter has an attribute of the specified attribute type.
 		/// </summary>
 		/// <param name="parameter">The parameter on which the attributes are declared.</param>
 		/// <param name="attributeType">The attribute type to look for.</param>
@@ -483,7 +599,7 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		}
 
 		/// <summary>
-		/// Gets the attribute of the specified attribute type (or derived attribute types).
+		/// Gets the attribute of the specified attribute type.
 		/// </summary>
 		/// <param name="parameter">The parameter on which the attributes are declared.</param>
 		/// <param name="attributeType">The attribute type to look for.</param>
@@ -583,14 +699,14 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		public static bool IsDirectImportOf(this ITypeDefinition type, IModule module)
 		{
 			var moduleReference = type.ParentModule;
-			foreach (var asmRef in module.PEFile.AssemblyReferences)
+			foreach (var asmRef in module.MetadataFile.AssemblyReferences)
 			{
 				if (asmRef.FullName == moduleReference.FullAssemblyName)
 					return true;
 				if (asmRef.Name == "netstandard" && asmRef.GetPublicKeyToken() != null)
 				{
 					var referencedModule = module.Compilation.FindModuleByReference(asmRef);
-					if (referencedModule != null && !referencedModule.PEFile.GetTypeForwarder(type.FullTypeName).IsNil)
+					if (referencedModule != null && !referencedModule.MetadataFile.GetTypeForwarder(type.FullTypeName).IsNil)
 						return true;
 				}
 			}
@@ -631,6 +747,22 @@ namespace ICSharpCode.Decompiler.TypeSystem
 			{
 				return new ParameterizedType(td, td.TypeArguments);
 			}
+		}
+
+		public static INamespace GetNamespaceByFullName(this ICompilation compilation, string name)
+		{
+			if (string.IsNullOrEmpty(name))
+				return compilation.RootNamespace;
+			var parts = name.Split('.');
+			var ns = compilation.RootNamespace;
+			foreach (var part in parts)
+			{
+				var child = ns.GetChildNamespace(part);
+				if (child == null)
+					return null;
+				ns = child;
+			}
+			return ns;
 		}
 	}
 }

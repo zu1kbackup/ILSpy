@@ -1,35 +1,25 @@
 ﻿using ICSharpCode.ILSpy.Docking;
-using ICSharpCode.ILSpy.Properties;
 using ICSharpCode.ILSpy.ViewModels;
 
 namespace ICSharpCode.ILSpy.Commands
 {
-	[ExportMainMenuCommand(Menu = nameof(Resources._Window), Header = nameof(Resources._Assemblies), MenuCategory = "pane", MenuOrder = 5000)]
-	class ShowAssemblies : SimpleCommand
+	class ToolPaneCommand(string contentId, DockWorkspace dockWorkspace) : SimpleCommand
 	{
 		public override void Execute(object parameter)
 		{
-			DockWorkspace.Instance.ShowToolPane(AssemblyListPaneModel.PaneContentId);
+			dockWorkspace.ShowToolPane(contentId);
 		}
 	}
 
-	[ExportMainMenuCommand(Menu = nameof(Resources._Window), Header = nameof(Resources._Analyzer), MenuCategory = "pane", MenuOrder = 5000)]
-	class ShowAnalyzer : SimpleCommand
+	class TabPageCommand(TabPageModel model, DockWorkspace dockWorkspace) : SimpleCommand
 	{
 		public override void Execute(object parameter)
 		{
-			DockWorkspace.Instance.ShowToolPane(AnalyzerPaneModel.PaneContentId);
+			// ensure the tab control is focused before setting the active tab page, else the tab will not be focused
+			dockWorkspace.ActiveTabPage?.Focus();
+			// reset first, else clicking on the already active tab will not focus the tab and the menu checkmark will not be updated
+			dockWorkspace.ActiveTabPage = null;
+			dockWorkspace.ActiveTabPage = model;
 		}
 	}
-
-#if DEBUG
-	[ExportMainMenuCommand(Menu = nameof(Resources._Window), Header = nameof(Resources._ShowDebugSteps), MenuCategory = "pane", MenuOrder = 5000)]
-	class ShowDebugSteps : SimpleCommand
-	{
-		public override void Execute(object parameter)
-		{
-			DockWorkspace.Instance.ShowToolPane(DebugStepsPaneModel.PaneContentId);
-		}
-	}
-#endif
 }

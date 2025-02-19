@@ -17,19 +17,25 @@
 // DEALINGS IN THE SOFTWARE.
 
 using System;
-using System.ComponentModel.Composition;
+using System.Composition;
 using System.IO;
 
+using ICSharpCode.BamlDecompiler;
+using ICSharpCode.Decompiler;
+using ICSharpCode.Decompiler.CSharp.ProjectDecompiler;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.ILSpy;
 using ICSharpCode.ILSpy.TreeNodes;
+using ICSharpCode.ILSpyX;
+using ICSharpCode.ILSpyX.Abstractions;
 
 namespace ILSpy.BamlDecompiler
 {
 	[Export(typeof(IResourceNodeFactory))]
+	[Shared]
 	public sealed class BamlResourceNodeFactory : IResourceNodeFactory
 	{
-		public ILSpyTreeNode CreateNode(Resource resource)
+		public ITreeNode CreateNode(Resource resource)
 		{
 			if (resource.Name.EndsWith(".baml", StringComparison.OrdinalIgnoreCase))
 				return new BamlResourceEntryNode(resource.Name, resource.TryOpenStream);
@@ -39,21 +45,40 @@ namespace ILSpy.BamlDecompiler
 	}
 
 	[Export(typeof(IResourceFileHandler))]
+	[Shared]
 	public sealed class BamlResourceFileHandler : IResourceFileHandler
 	{
 		public string EntryType => "Page";
-		public bool CanHandle(string name, DecompilationOptions options) => name.EndsWith(".baml", StringComparison.OrdinalIgnoreCase);
+		public bool CanHandle(string name, ResourceFileHandlerContext context) => name.EndsWith(".baml", StringComparison.OrdinalIgnoreCase);
 
-		public string WriteResourceToFile(LoadedAssembly assembly, string fileName, Stream stream, DecompilationOptions options)
+		public string WriteResourceToFile(LoadedAssembly assembly, string fileName, Stream stream, ResourceFileHandlerContext context)
 		{
-			BamlDecompilerTypeSystem typeSystem = new BamlDecompilerTypeSystem(assembly.GetPEFileOrNull(), assembly.GetAssemblyResolver());
+			BamlDecompilerTypeSystem typeSystem = new BamlDecompilerTypeSystem(assembly.GetMetadataFileOrNull(), assembly.GetAssemblyResolver());
 			var decompiler = new XamlDecompiler(typeSystem, new BamlDecompilerSettings() {
-				ThrowOnAssemblyResolveErrors = options.DecompilerSettings.ThrowOnAssemblyResolveErrors
+				ThrowOnAssemblyResolveErrors = context.DecompilationOptions.DecompilerSettings.ThrowOnAssemblyResolveErrors
 			});
-			decompiler.CancellationToken = options.CancellationToken;
-			fileName = Path.ChangeExtension(fileName, ".xaml");
+			decompiler.CancellationToken = context.DecompilationOptions.CancellationToken;
 			var result = decompiler.Decompile(stream);
-			result.Xaml.Save(Path.Combine(options.SaveAsProjectDirectory, fileName));
+			var typeDefinition = result.TypeName.HasValue ? typeSystem.MainModule.GetTypeDefinition(result.TypeName.Value.TopLevelTypeName) : null;
+			if (typeDefinition != null)
+			{
+				fileName = WholeProjectDecompiler.CleanUpPath(typeDefinition.ReflectionName) + ".xaml";
+				var partialTypeInfo = new PartialTypeInfo(typeDefinition);
+				foreach (var member in result.GeneratedMembers)
+				{
+					partialTypeInfo.AddDeclaredMember(member);
+				}
+				context.AddPartialTypeInfo(partialTypeInfo);
+			}
+			else
+			{
+				fileName = Path.ChangeExtension(fileName, ".xaml");
+			}
+			context.AdditionalProperties.Add("Generator", "MSBuild:Compile");
+			context.AdditionalProperties.Add("SubType", "Designer");
+			string saveFileName = Path.Combine(context.DecompilationOptions.SaveAsProjectDirectory, fileName);
+			Directory.CreateDirectory(Path.GetDirectoryName(saveFileName));
+			result.Xaml.Save(saveFileName);
 			return fileName;
 		}
 	}

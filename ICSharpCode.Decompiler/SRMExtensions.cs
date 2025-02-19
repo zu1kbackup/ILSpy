@@ -1,10 +1,13 @@
 ﻿using System;
 using System.Collections.Immutable;
+using System.IO;
+using System.IO.MemoryMappedFiles;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 
+using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.Decompiler.Util;
 
@@ -140,31 +143,61 @@ namespace ICSharpCode.Decompiler
 			return accessors.Raiser;
 		}
 
-		public static TypeDefinitionHandle GetDeclaringType(this EntityHandle entity, MetadataReader metadata)
+		public static EntityHandle GetGenericType(this in TypeSpecification ts, MetadataReader metadata)
+		{
+			if (ts.Signature.IsNil)
+				return default;
+			// Do a quick scan using BlobReader
+			var signature = metadata.GetBlobReader(ts.Signature);
+			// When dealing with FSM implementations, we can safely assume that if it's a type spec,
+			// it must be a generic type instance.
+			if (signature.ReadByte() != (byte)SignatureTypeCode.GenericTypeInstance)
+				return default;
+			// Skip over the rawTypeKind: value type or class
+			var rawTypeKind = signature.ReadCompressedInteger();
+			if (rawTypeKind < 17 || rawTypeKind > 18)
+				return default;
+			// Only read the generic type, ignore the type arguments
+			return signature.ReadTypeHandle();
+		}
+
+		public static EntityHandle GetDeclaringType(this EntityHandle entity, MetadataReader metadata)
 		{
 			switch (entity.Kind)
 			{
 				case HandleKind.TypeDefinition:
 					var td = metadata.GetTypeDefinition((TypeDefinitionHandle)entity);
 					return td.GetDeclaringType();
+				case HandleKind.TypeReference:
+					var tr = metadata.GetTypeReference((TypeReferenceHandle)entity);
+					return tr.GetDeclaringType();
+				case HandleKind.TypeSpecification:
+					var ts = metadata.GetTypeSpecification((TypeSpecificationHandle)entity);
+					return ts.GetGenericType(metadata).GetDeclaringType(metadata);
 				case HandleKind.FieldDefinition:
 					var fd = metadata.GetFieldDefinition((FieldDefinitionHandle)entity);
 					return fd.GetDeclaringType();
 				case HandleKind.MethodDefinition:
 					var md = metadata.GetMethodDefinition((MethodDefinitionHandle)entity);
 					return md.GetDeclaringType();
+				case HandleKind.MemberReference:
+					var mr = metadata.GetMemberReference((MemberReferenceHandle)entity);
+					return mr.Parent;
 				case HandleKind.EventDefinition:
 					var ed = metadata.GetEventDefinition((EventDefinitionHandle)entity);
 					return metadata.GetMethodDefinition(ed.GetAccessors().GetAny()).GetDeclaringType();
 				case HandleKind.PropertyDefinition:
 					var pd = metadata.GetPropertyDefinition((PropertyDefinitionHandle)entity);
 					return metadata.GetMethodDefinition(pd.GetAccessors().GetAny()).GetDeclaringType();
+				case HandleKind.MethodSpecification:
+					var ms = metadata.GetMethodSpecification((MethodSpecificationHandle)entity);
+					return ms.Method.GetDeclaringType(metadata);
 				default:
 					throw new ArgumentOutOfRangeException();
 			}
 		}
 
-		public static TypeReferenceHandle GetDeclaringType(this TypeReference tr)
+		public static TypeReferenceHandle GetDeclaringType(this in TypeReference tr)
 		{
 			switch (tr.ResolutionScope.Kind)
 			{
@@ -195,15 +228,141 @@ namespace ICSharpCode.Decompiler
 		public static bool IsKnownType(this EntityHandle handle, MetadataReader reader,
 			KnownTypeCode knownType)
 		{
-			return !handle.IsNil
-				&& GetFullTypeName(handle, reader) == KnownTypeReference.Get(knownType).TypeName;
+			return IsKnownType(handle, reader, KnownTypeReference.Get(knownType).TypeName);
 		}
 
 		internal static bool IsKnownType(this EntityHandle handle, MetadataReader reader,
 			KnownAttribute knownType)
 		{
-			return !handle.IsNil
-				&& GetFullTypeName(handle, reader) == knownType.GetTypeName();
+			return IsKnownType(handle, reader, knownType.GetTypeName());
+		}
+
+		private static bool IsKnownType(EntityHandle handle, MetadataReader reader, TopLevelTypeName knownType)
+		{
+			if (handle.IsNil)
+				return false;
+			StringHandle nameHandle, namespaceHandle;
+			try
+			{
+				switch (handle.Kind)
+				{
+					case HandleKind.TypeReference:
+						var tr = reader.GetTypeReference((TypeReferenceHandle)handle);
+						// ignore exported and nested types
+						if (tr.ResolutionScope.IsNil || tr.ResolutionScope.Kind == HandleKind.TypeReference)
+							return false;
+						nameHandle = tr.Name;
+						namespaceHandle = tr.Namespace;
+						break;
+					case HandleKind.TypeDefinition:
+						var td = reader.GetTypeDefinition((TypeDefinitionHandle)handle);
+						if (td.IsNested)
+							return false;
+						nameHandle = td.Name;
+						namespaceHandle = td.Namespace;
+						break;
+					case HandleKind.TypeSpecification:
+						var ts = reader.GetTypeSpecification((TypeSpecificationHandle)handle);
+						var blob = reader.GetBlobReader(ts.Signature);
+						return SignatureIsKnownType(reader, knownType, ref blob);
+					default:
+						return false;
+				}
+			}
+			catch (BadImageFormatException)
+			{
+				// ignore bad metadata when trying to resolve ResolutionScope et al.
+				return false;
+			}
+			if (knownType.TypeParameterCount == 0)
+			{
+				if (!reader.StringComparer.Equals(nameHandle, knownType.Name))
+					return false;
+			}
+			else
+			{
+				string name = reader.GetString(nameHandle);
+				name = ReflectionHelper.SplitTypeParameterCountFromReflectionName(name, out int typeParameterCount);
+				if (typeParameterCount != knownType.TypeParameterCount || name != knownType.Name)
+					return false;
+			}
+			if (namespaceHandle.IsNil)
+			{
+				return knownType.Namespace.Length == 0;
+			}
+			else
+			{
+				return reader.StringComparer.Equals(namespaceHandle, knownType.Namespace);
+			}
+		}
+
+		private static bool SignatureIsKnownType(MetadataReader reader, TopLevelTypeName knownType, ref BlobReader blob)
+		{
+			if (!blob.TryReadCompressedInteger(out int typeCode))
+				return false;
+			switch (typeCode)
+			{
+				case 0x1: // ELEMENT_TYPE_VOID
+					return knownType.IsKnownType(KnownTypeCode.Void);
+				case 0x2: // ELEMENT_TYPE_BOOLEAN 
+					return knownType.IsKnownType(KnownTypeCode.Boolean);
+				case 0x3: // ELEMENT_TYPE_CHAR 
+					return knownType.IsKnownType(KnownTypeCode.Char);
+				case 0x4: // ELEMENT_TYPE_I1 
+					return knownType.IsKnownType(KnownTypeCode.SByte);
+				case 0x5: // ELEMENT_TYPE_U1
+					return knownType.IsKnownType(KnownTypeCode.Byte);
+				case 0x6: // ELEMENT_TYPE_I2
+					return knownType.IsKnownType(KnownTypeCode.Int16);
+				case 0x7: // ELEMENT_TYPE_U2
+					return knownType.IsKnownType(KnownTypeCode.UInt16);
+				case 0x8: // ELEMENT_TYPE_I4
+					return knownType.IsKnownType(KnownTypeCode.Int32);
+				case 0x9: // ELEMENT_TYPE_U4
+					return knownType.IsKnownType(KnownTypeCode.UInt32);
+				case 0xA: // ELEMENT_TYPE_I8
+					return knownType.IsKnownType(KnownTypeCode.Int64);
+				case 0xB: // ELEMENT_TYPE_U8
+					return knownType.IsKnownType(KnownTypeCode.UInt64);
+				case 0xC: // ELEMENT_TYPE_R4
+					return knownType.IsKnownType(KnownTypeCode.Single);
+				case 0xD: // ELEMENT_TYPE_R8
+					return knownType.IsKnownType(KnownTypeCode.Double);
+				case 0xE: // ELEMENT_TYPE_STRING
+					return knownType.IsKnownType(KnownTypeCode.String);
+				case 0x16: // ELEMENT_TYPE_TYPEDBYREF
+					return knownType.IsKnownType(KnownTypeCode.TypedReference);
+				case 0x18: // ELEMENT_TYPE_I
+					return knownType.IsKnownType(KnownTypeCode.IntPtr);
+				case 0x19: // ELEMENT_TYPE_U
+					return knownType.IsKnownType(KnownTypeCode.UIntPtr);
+				case 0x1C: // ELEMENT_TYPE_OBJECT
+					return knownType.IsKnownType(KnownTypeCode.Object);
+				case 0xF: // ELEMENT_TYPE_PTR 
+				case 0x10: // ELEMENT_TYPE_BYREF 
+				case 0x45: // ELEMENT_TYPE_PINNED
+				case 0x1D: // ELEMENT_TYPE_SZARRAY
+				case 0x1B: // ELEMENT_TYPE_FNPTR 
+				case 0x14: // ELEMENT_TYPE_ARRAY 
+					return false;
+				case 0x1F: // ELEMENT_TYPE_CMOD_REQD 
+				case 0x20: // ELEMENT_TYPE_CMOD_OPT 
+						   // modifier
+					blob.ReadTypeHandle(); // skip modifier
+					return SignatureIsKnownType(reader, knownType, ref blob);
+				case 0x15: // ELEMENT_TYPE_GENERICINST 
+						   // generic type
+					return SignatureIsKnownType(reader, knownType, ref blob);
+				case 0x13: // ELEMENT_TYPE_VAR
+				case 0x1E: // ELEMENT_TYPE_MVAR 
+						   // index
+					return false;
+				case 0x11: // ELEMENT_TYPE_VALUETYPE
+				case 0x12: // ELEMENT_TYPE_CLASS
+					return IsKnownType(blob.ReadTypeHandle(), reader, knownType);
+				default:
+					return false;
+			}
 		}
 
 		public static FullTypeName GetFullTypeName(this TypeSpecificationHandle handle, MetadataReader reader)
@@ -468,7 +627,7 @@ namespace ICSharpCode.Decompiler
 		}
 		#endregion
 
-		public static unsafe BlobReader GetInitialValue(this FieldDefinition field, PEReader pefile,
+		public static unsafe BlobReader GetInitialValue(this FieldDefinition field, MetadataFile pefile,
 			ICompilation typeSystem)
 		{
 			if (!field.HasFlag(FieldAttributes.HasFieldRVA))
@@ -494,10 +653,10 @@ namespace ICSharpCode.Decompiler
 			public FieldValueSizeDecoder(ICompilation typeSystem = null)
 			{
 				this.module = (MetadataModule)typeSystem?.MainModule;
-				if (module == null)
+				if (module?.MetadataFile is not PEFile pefile)
 					this.pointerSize = IntPtr.Size;
 				else
-					this.pointerSize = module.PEFile.Reader.PEHeaders.PEHeader.Magic == PEMagic.PE32 ? 4 : 8;
+					this.pointerSize = pefile.Reader.PEHeaders.PEHeader.Magic == PEMagic.PE32 ? 4 : 8;
 			}
 
 			public int GetArrayType(int elementType, ArrayShape shape) =>
@@ -554,7 +713,7 @@ namespace ICSharpCode.Decompiler
 				var typeDef = module?.ResolveType(handle, new GenericContext()).GetDefinition();
 				if (typeDef == null || typeDef.MetadataToken.IsNil)
 					return 0;
-				reader = typeDef.ParentModule.PEFile.Metadata;
+				reader = typeDef.ParentModule.MetadataFile.Metadata;
 				var td = reader.GetTypeDefinition((TypeDefinitionHandle)typeDef.MetadataToken);
 				return td.GetLayout().Size;
 			}
@@ -590,6 +749,12 @@ namespace ICSharpCode.Decompiler
 				SignatureCallingConvention.Unmanaged => "unmanaged",
 				_ => callConv.ToString().ToLowerInvariant()
 			};
+		}
+
+		public static UnmanagedMemoryStream AsStream(this MemoryMappedViewAccessor view)
+		{
+			long size = checked((long)view.SafeMemoryMappedViewHandle.ByteLength);
+			return new UnmanagedMemoryStream(view.SafeMemoryMappedViewHandle, 0, size);
 		}
 	}
 }

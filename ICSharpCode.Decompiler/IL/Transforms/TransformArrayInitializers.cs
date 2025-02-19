@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2015 Siegfried Pammer
+// Copyright (c) 2015 Siegfried Pammer
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection.Metadata;
+using System.Text;
 
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.Decompiler.Util;
@@ -75,7 +76,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				}
 				if (arrayLength.Length == 1)
 				{
-					if (HandleSimpleArrayInitializer(function, body, pos + 1, v, elementType, arrayLength, out var arrayValues, out var instructionsToRemove))
+					if (HandleSimpleArrayInitializer(function, body, pos + 1, v, arrayLength, out var arrayValues, out var instructionsToRemove))
 					{
 						context.Step("HandleSimpleArrayInitializer: single-dim", inst);
 						var block = new Block(BlockKind.ArrayInitializer);
@@ -113,9 +114,9 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			return false;
 		}
 
-		internal static bool TransformSpanTArrayInitialization(NewObj inst, StatementTransformContext context, out Block block)
+		internal static bool TransformSpanTArrayInitialization(NewObj inst, StatementTransformContext context, out ILInstruction replacement)
 		{
-			block = null;
+			replacement = null;
 			if (!context.Settings.ArrayInitializers)
 				return false;
 			if (MatchSpanTCtorWithPointerAndSize(inst, context, out var elementType, out var field, out var size))
@@ -123,16 +124,46 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				if (field.HasFlag(System.Reflection.FieldAttributes.HasFieldRVA))
 				{
 					var valuesList = new List<ILInstruction>();
-					var initialValue = field.GetInitialValue(context.PEFile.Reader, context.TypeSystem);
+					var initialValue = field.GetInitialValue(context.PEFile, context.TypeSystem);
+					if (context.Settings.Utf8StringLiterals &&
+						elementType.IsKnownType(KnownTypeCode.Byte) &&
+						DecodeUTF8String(initialValue, size, out string text))
+					{
+						replacement = new LdStrUtf8(text);
+						return true;
+					}
 					if (DecodeArrayInitializer(elementType, initialValue, new[] { size }, valuesList))
 					{
 						var tempStore = context.Function.RegisterVariable(VariableKind.InitializerTarget, new ArrayType(context.TypeSystem, elementType));
-						block = BlockFromInitializer(tempStore, elementType, new[] { size }, valuesList.ToArray());
+						replacement = BlockFromInitializer(tempStore, elementType, new[] { size }, valuesList.ToArray());
 						return true;
 					}
 				}
 			}
 			return false;
+		}
+
+		private static unsafe bool DecodeUTF8String(BlobReader blob, int size, out string text)
+		{
+			if (size > blob.RemainingBytes)
+			{
+				text = null;
+				return false;
+			}
+			for (int i = 0; i < size; i++)
+			{
+				byte val = blob.CurrentPointer[i];
+				// If the string has control characters, it's probably binary data and not a string.
+				if (val < 0x20 && val is not ((byte)'\r' or (byte)'\n' or (byte)'\t'))
+				{
+					text = null;
+					return false;
+				}
+			}
+			text = Encoding.UTF8.GetString(blob.CurrentPointer, size);
+			// Only use UTF8 string literal if we can perfectly roundtrip the data
+			byte[] bytes = Encoding.UTF8.GetBytes(text);
+			return MemoryExtensions.SequenceEqual(bytes, new ReadOnlySpan<byte>(blob.CurrentPointer, size));
 		}
 
 		static bool MatchSpanTCtorWithPointerAndSize(NewObj newObj, StatementTransformContext context, out IType elementType, out FieldDefinition field, out int size)
@@ -141,7 +172,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			size = default;
 			elementType = null;
 			IType type = newObj.Method.DeclaringType;
-			if (!type.IsKnownType(KnownTypeCode.SpanOfT) && !type.IsKnownType(KnownTypeCode.ReadOnlySpanOfT))
+			if (!type.IsKnownType(KnownTypeCode.ReadOnlySpanOfT))
 				return false;
 			if (newObj.Arguments.Count != 2 || type.TypeArguments.Count != 1)
 				return false;
@@ -172,7 +203,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 					ILInlining.InlineIfPossible(body, pos, context);
 					return true;
 				}
-				if (HandleSimpleArrayInitializer(function, body, pos + 1, v, elementType, length, out var arrayValues, out var instructionsToRemove))
+				if (HandleSimpleArrayInitializer(function, body, pos + 1, v, length, out var arrayValues, out var instructionsToRemove))
 				{
 					context.Step("HandleSimpleArrayInitializer: multi-dim", inst);
 					var block = new Block(BlockKind.ArrayInitializer);
@@ -212,7 +243,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 
 					while (blob.RemainingBytes > 0)
 					{
-						block.Instructions.Add(StElemPtr(tempStore, blob.Offset, new LdcI4(blob.ReadByte()), elementType));
+						block.Instructions.Add(StElemPtr(tempStore, blob.Offset, ReadElement(ref blob, elementType), elementType));
 					}
 
 					block.FinalInstruction = new LdLoc(tempStore);
@@ -240,13 +271,30 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			return false;
 		}
 
+		private ILInstruction ReadElement(ref BlobReader blob, IType elementType)
+		{
+			switch (elementType.GetSize())
+			{
+				case 1:
+					return new LdcI4(blob.ReadByte());
+				case 2:
+					return new LdcI4(blob.ReadInt16());
+				case 4:
+					return new LdcI4(blob.ReadInt32());
+				case 8:
+					return new LdcI8(blob.ReadInt64());
+				default:
+					throw new NotSupportedException();
+			}
+		}
+
 		bool HandleCpblkInitializer(Block block, int pos, ILVariable v, long length, out BlobReader blob, out IType elementType)
 		{
 			blob = default;
 			elementType = null;
 			if (!block.Instructions[pos].MatchCpblk(out var dest, out var src, out var size))
 				return false;
-			if (!dest.MatchLdLoc(v) || !src.MatchLdsFlda(out var field) || !size.MatchLdcI4((int)length))
+			if (!dest.MatchLdLoc(v) || !MatchGetStaticFieldAddress(src, out var field) || !size.MatchLdcI4((int)length))
 				return false;
 			if (!(v.IsSingleDefinition && v.LoadCount == 2))
 				return false;
@@ -272,19 +320,46 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			else if (value is NewObj { Arguments: { Count: 2 } } newObj
 				  && newObj.Method.DeclaringType.IsKnownType(KnownTypeCode.SpanOfT)
 				  && newObj.Arguments[0].MatchLdLoc(v)
-				  && newObj.Arguments[1].MatchLdcI4((int)length))
+				  && newObj.Arguments[1].MatchLdcI4(out var elementCount))
 			{
 				elementType = ((ParameterizedType)newObj.Method.DeclaringType).TypeArguments[0];
+				if (elementCount != length / elementType.GetSize())
+					return false;
 			}
 			else
 			{
 				return false;
 			}
-			blob = fd.GetInitialValue(context.PEFile.Reader, context.TypeSystem);
+			blob = fd.GetInitialValue(context.PEFile, context.TypeSystem);
 			return true;
 		}
 
-		bool HandleSequentialLocAllocInitializer(Block block, int pos, ILVariable store, ILInstruction locAllocInstruction, out IType elementType, out StObj[] values, out int instructionsToRemove)
+		bool MatchGetStaticFieldAddress(ILInstruction input, out IField field)
+		{
+			if (input.MatchLdsFlda(out field))
+				return true;
+			// call get_Item(addressof System.ReadOnlySpan`1[[T]](call CreateSpan(ldmembertoken field)), ldc.i4 0)
+			if (input is not Call { Method.Name: "get_Item", Arguments.Count: 2 } call)
+				return false;
+			if (!call.Method.DeclaringType.IsKnownType(KnownTypeCode.ReadOnlySpanOfT))
+				return false;
+			if (!call.Arguments[1].MatchLdcI4(0))
+				return false;
+			if (call.Arguments[0] is not AddressOf addressOf)
+				return false;
+			if (addressOf.Value is not Call { Method.Name: "CreateSpan", Arguments.Count: 1 } createSpanCall)
+				return false;
+			if (!IsRuntimeHelpers(createSpanCall.Method.DeclaringType))
+				return false;
+			if (!createSpanCall.Arguments[0].MatchLdMemberToken(out var member))
+				return false;
+			field = member as IField;
+			return field != null;
+		}
+
+		static bool IsRuntimeHelpers(IType type) => type is { Name: "RuntimeHelpers", Namespace: "System.Runtime.CompilerServices" };
+
+		unsafe bool HandleSequentialLocAllocInitializer(Block block, int pos, ILVariable store, ILInstruction locAllocInstruction, out IType elementType, out StObj[] values, out int instructionsToRemove)
 		{
 			int elementCount = 0;
 			long minExpectedOffset = 0;
@@ -295,24 +370,60 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			if (!locAllocInstruction.MatchLocAlloc(out var lengthInstruction))
 				return false;
 
-			if (block.Instructions[pos].MatchInitblk(out var dest, out var value, out var size)
-				&& lengthInstruction.MatchLdcI(out long byteCount))
+			BlobReader blob = default;
+
+			if (lengthInstruction.MatchLdcI(out long byteCount))
 			{
-				if (!dest.MatchLdLoc(store) || !size.MatchLdcI(byteCount))
-					return false;
-				instructionsToRemove++;
-				pos++;
+				if (block.Instructions[pos].MatchInitblk(out var dest, out var value, out var size))
+				{
+					if (!dest.MatchLdLoc(store) || !size.MatchLdcI(byteCount))
+						return false;
+					instructionsToRemove++;
+					pos++;
+				}
+				else if (block.Instructions[pos].MatchCpblk(out dest, out var src, out size))
+				{
+					if (!dest.MatchLdLoc(store) || !size.MatchLdcI(byteCount))
+						return false;
+					if (!MatchGetStaticFieldAddress(src, out var field))
+						return false;
+					var fd = context.PEFile.Metadata.GetFieldDefinition((FieldDefinitionHandle)field.MetadataToken);
+					if (!fd.HasFlag(System.Reflection.FieldAttributes.HasFieldRVA))
+						return false;
+					blob = fd.GetInitialValue(context.PEFile, context.TypeSystem);
+					instructionsToRemove++;
+					pos++;
+				}
 			}
 
 			for (int i = pos; i < block.Instructions.Count; i++)
 			{
 				// match the basic stobj pattern
-				if (!block.Instructions[i].MatchStObj(out ILInstruction target, out value, out var currentType)
+				if (!block.Instructions[i].MatchStObj(out ILInstruction target, out var value, out var currentType)
 					|| value.Descendants.OfType<IInstructionWithVariableOperand>().Any(inst => inst.Variable == store))
 					break;
-				if (elementType != null && !currentType.Equals(elementType))
+				// first
+				if (elementType == null)
+				{
+					elementType = currentType;
+					if (blob.StartPointer != null)
+					{
+						var countInstruction = PointerArithmeticOffset.Detect(lengthInstruction, elementType, checkForOverflow: true);
+						if (countInstruction == null || !countInstruction.MatchLdcI(out long valuesLength) || valuesLength < 1)
+							return false;
+						values = new StObj[(int)valuesLength];
+						int valueIndex = 0;
+						while (blob.RemainingBytes > 0 && valueIndex < values.Length)
+						{
+							values[valueIndex] = StElemPtr(store, blob.Offset, ReadElement(ref blob, elementType), elementType);
+							valueIndex++;
+						}
+					}
+				}
+				else if (!currentType.Equals(elementType))
+				{
 					break;
-				elementType = currentType;
+				}
 				// match the target
 				// should be either ldloc store (at offset 0)
 				// or binary.add(ldloc store, offset) where offset is either 'elementSize' or 'i * elementSize'
@@ -372,7 +483,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			return new StObj(targetInst, storeInstruction.Value, storeInstruction.Type);
 		}
 
-		ILInstruction StElemPtr(ILVariable target, int offset, LdcI4 value, IType type)
+		StObj StElemPtr(ILVariable target, int offset, ILInstruction value, IType type)
 		{
 			var targetInst = offset == 0 ? (ILInstruction)new LdLoc(target) : new BinaryNumericInstruction(
 				BinaryNumericOperator.Add,
@@ -387,12 +498,17 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 		/// <summary>
 		/// Handle simple case where RuntimeHelpers.InitializeArray is not used.
 		/// </summary>
-		internal static bool HandleSimpleArrayInitializer(ILFunction function, Block block, int pos, ILVariable store, IType elementType, int[] arrayLength, out (ILInstruction[] Indices, ILInstruction Value)[] values, out int instructionsToRemove)
+		internal static bool HandleSimpleArrayInitializer(ILFunction function, Block block, int pos, ILVariable store, int[] arrayLength, out (ILInstruction[] Indices, ILInstruction Value)[] values, out int instructionsToRemove)
 		{
 			instructionsToRemove = 0;
 			int elementCount = 0;
-			var length = arrayLength.Aggregate(1, (t, l) => t * l);
-			values = new (ILInstruction[] Indices, ILInstruction Value)[length];
+			int length = arrayLength.Aggregate(1, (t, l) => t * l);
+			// Cannot pre-allocate the result array, because we do not know yet,
+			// whether there is in fact an array initializer.
+			// To prevent excessive allocations, use min(|block|, arraySize) als initial capacity.
+			// This should prevent list-resizing as well as out-of-memory errors.
+			values = null;
+			var valuesList = new List<(ILInstruction[] Indices, ILInstruction Value)>(Math.Min(block.Instructions.Count, length));
 
 			int[] nextMinimumIndex = new int[arrayLength.Length];
 
@@ -435,7 +551,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				for (int k = nextMinimumIndex.Length - 1; k >= 0; k--)
 				{
 					nextMinimumIndex[k]++;
-					if (nextMinimumIndex[k] < arrayLength[k])
+					if (nextMinimumIndex[k] < arrayLength[k] || k == 0)
 						break;
 					nextMinimumIndex[k] = 0;
 				}
@@ -443,7 +559,6 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				return nextIndices;
 			}
 
-			int j = 0;
 			int i = pos;
 			int step;
 			while (i < block.Instructions.Count)
@@ -483,7 +598,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				if (indices.Count != arrayLength.Length)
 					break;
 				bool exact;
-				if (j >= values.Length)
+				if (length <= 0)
 					break;
 				do
 				{
@@ -492,16 +607,15 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 						return false;
 					if (exact)
 					{
-						values[j] = (nextIndices, value);
+						valuesList.Add((nextIndices, value));
 						elementCount++;
 						instructionsToRemove += step;
 					}
 					else
 					{
-						values[j] = (nextIndices, null);
+						valuesList.Add((nextIndices, null));
 					}
-					j++;
-				} while (j < values.Length && !exact);
+				} while (valuesList.Count < length && !exact);
 				i += step;
 			}
 			if (i < block.Instructions.Count)
@@ -514,53 +628,61 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 						return false;
 				}
 			}
-			while (j < values.Length)
+			if (pos + instructionsToRemove >= block.Instructions.Count)
+				return false;
+			if (elementCount == 0)
+				return false;
+
+			bool mustTransform = ILInlining.IsCatchWhenBlock(block) || ILInlining.IsInConstructorInitializer(function, block.Instructions[pos]);
+			// If there are not enough user-defined elements after scanning all instructions, we can abort the transform.
+			// This avoids unnecessary allocations and OOM crashes (in case of int.MaxValue).
+			if (elementCount < length / 3 - 5)
+			{
+				if (!mustTransform)
+					return false;
+				// .NET does not allow allocation of arrays >= 2 GB.
+				if (length >= int.MaxValue)
+					return false;
+			}
+
+			for (int j = valuesList.Count; j < length; j++)
 			{
 				var nextIndices = CalculateNextIndices(null, out _);
 				if (nextIndices == null)
 					return false;
-				values[j] = (nextIndices, null);
-				j++;
+				valuesList.Add((nextIndices, null));
 			}
-			if (pos + instructionsToRemove >= block.Instructions.Count)
-				return false;
-			return ShouldTransformToInitializer(function, block, pos, elementCount, length);
-		}
-
-		static bool ShouldTransformToInitializer(ILFunction function, Block block, int startPos, int elementCount, int length)
-		{
-			if (elementCount == 0)
-				return false;
-			if (elementCount >= length / 3 - 5)
-				return true;
-			if (ILInlining.IsCatchWhenBlock(block) || ILInlining.IsInConstructorInitializer(function, block.Instructions[startPos]))
-				return true;
-			return false;
+			values = valuesList.ToArray();
+			return true;
 		}
 
 		bool HandleJaggedArrayInitializer(Block block, int pos, ILVariable store, IType elementType, int length, out ILVariable finalStore, out ILInstruction[] values, out int instructionsToRemove)
 		{
 			instructionsToRemove = 0;
 			finalStore = null;
-			values = new ILInstruction[length];
+			// Cannot pre-allocate the result array, because we do not know yet,
+			// whether there is in fact an array initializer.
+			// To prevent excessive allocations, use min(|block|, arraySize) als initial capacity.
+			// This should prevent list-resizing as well as out-of-memory errors.
+			values = null;
+			var valuesList = new List<ILInstruction>(Math.Min(block.Instructions.Count, length));
 
-			ILInstruction initializer;
-			IType type;
 			for (int i = 0; i < length; i++)
 			{
 				// 1. Instruction: (optional) temporary copy of store
 				bool hasTemporaryCopy = block.Instructions[pos].MatchStLoc(out var temp, out var storeLoad) && storeLoad.MatchLdLoc(store);
+				ILInstruction initializer;
 				if (hasTemporaryCopy)
 				{
-					if (!MatchJaggedArrayStore(block, pos + 1, temp, i, out initializer, out type))
+					if (!MatchJaggedArrayStore(block, pos + 1, temp, i, out initializer, out _))
 						return false;
 				}
 				else
 				{
-					if (!MatchJaggedArrayStore(block, pos, store, i, out initializer, out type))
+					if (!MatchJaggedArrayStore(block, pos, store, i, out initializer, out _))
 						return false;
 				}
-				values[i] = initializer;
+				valuesList.Add(initializer);
 				int inc = hasTemporaryCopy ? 3 : 2;
 				pos += inc;
 				instructionsToRemove += inc;
@@ -569,10 +691,15 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			// Remove it and use its value instead.
 			if (block.Instructions[pos].MatchStLoc(out finalStore, out var array))
 			{
+				if (!array.MatchLdLoc(store))
+					return false;
 				instructionsToRemove++;
-				return array.MatchLdLoc(store);
 			}
-			finalStore = store;
+			else
+			{
+				finalStore = store;
+			}
+			values = valuesList.ToArray();
 			return true;
 		}
 
@@ -604,16 +731,21 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			var block = new Block(BlockKind.ArrayInitializer);
 			block.Instructions.Add(new StLoc(v, new NewArr(elementType, arrayLength.Select(l => new LdcI4(l)).ToArray())));
 			int step = arrayLength.Length + 1;
+
+			var indices = new List<ILInstruction>();
 			for (int i = 0; i < values.Length / step; i++)
 			{
 				// values array is filled backwards
 				var value = values[step * i];
-				var indices = new List<ILInstruction>();
+
+				indices.EnsureCapacity(step - 1);
 				for (int j = step - 1; j >= 1; j--)
 				{
 					indices.Add(values[step * i + j]);
 				}
+
 				block.Instructions.Add(StElem(new LdLoc(v), indices.ToArray(), value, elementType));
+				indices.Clear();
 			}
 			block.FinalInstruction = new LdLoc(v);
 			return block;
@@ -646,12 +778,8 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			IMethod method = call.Method;
 			if (!method.IsStatic || method.Name != "InitializeArray" || method.DeclaringTypeDefinition == null)
 				return false;
-			var declaringType = method.DeclaringTypeDefinition;
-			if (declaringType.DeclaringType != null || declaringType.Name != "RuntimeHelpers"
-				|| declaringType.Namespace != "System.Runtime.CompilerServices")
-			{
+			if (!IsRuntimeHelpers(method.DeclaringType))
 				return false;
-			}
 			array = call.Arguments[0];
 			if (!call.Arguments[1].MatchLdMemberToken(out var member))
 				return false;
@@ -668,7 +796,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				if (field.HasFlag(System.Reflection.FieldAttributes.HasFieldRVA))
 				{
 					var valuesList = new List<ILInstruction>();
-					var initialValue = field.GetInitialValue(context.PEFile.Reader, context.TypeSystem);
+					var initialValue = field.GetInitialValue(context.PEFile, context.TypeSystem);
 					if (DecodeArrayInitializer(arrayType, initialValue, arrayLength, valuesList))
 					{
 						values = valuesList.ToArray();
@@ -701,7 +829,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			if (!field.HasFlag(System.Reflection.FieldAttributes.HasFieldRVA))
 				return false;
 			var valuesList = new List<ILInstruction>();
-			var initialValue = field.GetInitialValue(context.PEFile.Reader, context.TypeSystem);
+			var initialValue = field.GetInitialValue(context.PEFile, context.TypeSystem);
 			if (!DecodeArrayInitializer(elementType, initialValue, arrayLength, valuesList))
 				return false;
 			context.Step("InlineRuntimeHelpersInitializeArray: single-dim", inst);
@@ -757,6 +885,8 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			var totalLength = arrayLength.Aggregate(1, (t, l) => t * l);
 			if (initialValue.RemainingBytes < (totalLength * elementSize))
 				return false;
+
+			output.EnsureCapacity(totalLength + totalLength * arrayLength.Length);
 
 			for (int i = 0; i < totalLength; i++)
 			{

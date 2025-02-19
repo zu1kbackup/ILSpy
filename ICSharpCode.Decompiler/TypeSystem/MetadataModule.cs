@@ -51,10 +51,10 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		readonly MetadataEvent[] eventDefs;
 		readonly IModule[] referencedAssemblies;
 
-		internal MetadataModule(ICompilation compilation, Metadata.PEFile peFile, TypeSystemOptions options)
+		internal MetadataModule(ICompilation compilation, MetadataFile peFile, TypeSystemOptions options)
 		{
 			this.Compilation = compilation;
-			this.PEFile = peFile;
+			this.MetadataFile = peFile;
 			this.metadata = peFile.Metadata;
 			this.options = options;
 			this.TypeProvider = new TypeProvider(this);
@@ -66,6 +66,7 @@ namespace ICSharpCode.Decompiler.TypeSystem
 				try
 				{
 					this.AssemblyName = metadata.GetString(asmdef.Name);
+					this.AssemblyVersion = asmdef.Version;
 					this.FullAssemblyName = metadata.GetFullAssemblyName();
 				}
 				catch (BadImageFormatException)
@@ -111,12 +112,13 @@ namespace ICSharpCode.Decompiler.TypeSystem
 
 		public TypeSystemOptions TypeSystemOptions => options;
 
-		#region IAssembly interface
-		public PEFile PEFile { get; }
+		#region IModule interface
+		public MetadataFile MetadataFile { get; }
 
 		public bool IsMainModule => this == Compilation.MainModule;
 
 		public string AssemblyName { get; }
+		public Version AssemblyVersion { get; }
 		public string FullAssemblyName { get; }
 		string ISymbol.Name => AssemblyName;
 		SymbolKind ISymbol.SymbolKind => SymbolKind.Module;
@@ -127,10 +129,10 @@ namespace ICSharpCode.Decompiler.TypeSystem
 
 		public ITypeDefinition GetTypeDefinition(TopLevelTypeName topLevelTypeName)
 		{
-			var typeDefHandle = PEFile.GetTypeDefinition(topLevelTypeName);
+			var typeDefHandle = MetadataFile.GetTypeDefinition(topLevelTypeName);
 			if (typeDefHandle.IsNil)
 			{
-				var forwarderHandle = PEFile.GetTypeForwarder(topLevelTypeName);
+				var forwarderHandle = MetadataFile.GetTypeForwarder(topLevelTypeName);
 				if (!forwarderHandle.IsNil)
 				{
 					var forwarder = metadata.GetExportedType(forwarderHandle);
@@ -400,8 +402,9 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		IType ResolveDeclaringType(EntityHandle declaringTypeReference, GenericContext context)
 		{
 			// resolve without substituting dynamic/tuple types
-			var ty = ResolveType(declaringTypeReference, context,
-				options & ~(TypeSystemOptions.Dynamic | TypeSystemOptions.Tuple | TypeSystemOptions.NullabilityAnnotations));
+			const TypeSystemOptions removedOptions = TypeSystemOptions.Dynamic | TypeSystemOptions.Tuple
+				| TypeSystemOptions.NullabilityAnnotations | TypeSystemOptions.NativeIntegers | TypeSystemOptions.NativeIntegersWithoutAttribute;
+			var ty = ResolveType(declaringTypeReference, context, options & ~removedOptions);
 			// but substitute tuple types in type arguments:
 			ty = ApplyAttributeTypeVisitor.ApplyAttributesToType(ty, Compilation, null, metadata, options, Nullability.Oblivious, typeChildrenOnly: true);
 			return ty;
@@ -471,7 +474,10 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		IMethod ResolveMethodReference(MemberReferenceHandle memberRefHandle, GenericContext context, IReadOnlyList<IType> methodTypeArguments = null, bool expandVarArgs = true)
 		{
 			var memberRef = metadata.GetMemberReference(memberRefHandle);
-			Debug.Assert(memberRef.GetKind() == MemberReferenceKind.Method);
+			if (memberRef.GetKind() != MemberReferenceKind.Method)
+			{
+				throw new BadImageFormatException($"Member reference must be method, but was: {memberRef.GetKind()}");
+			}
 			MethodSignature<IType> signature;
 			IReadOnlyList<IType> classTypeArguments = null;
 			IMethod method;
@@ -621,7 +627,110 @@ namespace ICSharpCode.Decompiler.TypeSystem
 				parameters.Add(new DefaultParameter(type, ""));
 			}
 			m.Parameters = parameters;
+
+			GuessFakeMethodAccessor(declaringType, name, signature, m, parameters);
+
 			return m;
+		}
+
+		private void GuessFakeMethodAccessor(IType declaringType, string name, MethodSignature<IType> signature, FakeMethod m, List<IParameter> parameters)
+		{
+			if (signature.GenericParameterCount > 0)
+				return;
+
+			var guessedGetter = name.StartsWith("get_", StringComparison.Ordinal);
+			var guessedSetter = name.StartsWith("set_", StringComparison.Ordinal);
+			if (guessedGetter || guessedSetter)
+			{
+				var propertyName = name.Substring(4);
+
+				var fakeProperty = new FakeProperty(Compilation) {
+					Name = propertyName,
+					DeclaringType = declaringType,
+					IsStatic = m.IsStatic,
+				};
+
+				if (guessedGetter)
+				{
+					if (signature.ReturnType.Kind == TypeKind.Void)
+						return;
+
+					m.AccessorKind = MethodSemanticsAttributes.Getter;
+					m.AccessorOwner = fakeProperty;
+					fakeProperty.Getter = m;
+					fakeProperty.ReturnType = signature.ReturnType;
+					fakeProperty.IsIndexer = parameters.Count > 0;
+					fakeProperty.Parameters = parameters;
+					return;
+				}
+
+				if (guessedSetter)
+				{
+					if (parameters.Count < 1 || signature.ReturnType.Kind != TypeKind.Void)
+						return;
+
+					m.AccessorKind = MethodSemanticsAttributes.Setter;
+					m.AccessorOwner = fakeProperty;
+					fakeProperty.Setter = m;
+					fakeProperty.ReturnType = parameters.Last().Type;
+					fakeProperty.IsIndexer = parameters.Count > 1;
+					fakeProperty.Parameters = parameters.SkipLast(1).ToArray();
+					return;
+				}
+			}
+
+			const string addPrefix = "add_";
+			const string removePrefix = "remove_";
+			const string raisePrefix = "raise_";
+			var guessedAdd = name.StartsWith(addPrefix, StringComparison.Ordinal);
+			var guessedRemove = name.StartsWith(removePrefix, StringComparison.Ordinal);
+			var guessedRaise = name.StartsWith(raisePrefix, StringComparison.Ordinal);
+			if (guessedAdd || guessedRemove || guessedRaise)
+			{
+				var fakeEvent = new FakeEvent(Compilation) {
+					DeclaringType = declaringType,
+					IsStatic = m.IsStatic,
+				};
+
+				if (guessedAdd)
+				{
+					if (parameters.Count != 1)
+						return;
+
+					m.AccessorKind = MethodSemanticsAttributes.Adder;
+					m.AccessorOwner = fakeEvent;
+
+					fakeEvent.Name = name.Substring(addPrefix.Length);
+					fakeEvent.AddAccessor = m;
+					fakeEvent.ReturnType = parameters.Single().Type;
+
+					return;
+				}
+
+				if (guessedRemove)
+				{
+					if (parameters.Count != 1)
+						return;
+
+					m.AccessorKind = MethodSemanticsAttributes.Remover;
+					m.AccessorOwner = fakeEvent;
+
+					fakeEvent.Name = name.Substring(removePrefix.Length);
+					fakeEvent.RemoveAccessor = m;
+					fakeEvent.ReturnType = parameters.Single().Type;
+
+					return;
+				}
+
+				if (guessedRaise)
+				{
+					fakeEvent.Name = name.Substring(raisePrefix.Length);
+					fakeEvent.InvokeAccessor = m;
+					m.AccessorKind = MethodSemanticsAttributes.Raiser;
+					m.AccessorOwner = fakeEvent;
+					return;
+				}
+			}
 		}
 		#endregion
 
@@ -646,7 +755,9 @@ namespace ICSharpCode.Decompiler.TypeSystem
 				case HandleKind.TypeDefinition:
 				case HandleKind.TypeSpecification:
 				case HandleKind.ExportedType:
-					return ResolveType(entityHandle, context).GetDefinition();
+					// Using ResolveDeclaringType() here because ResolveType() might return
+					// nint/nuint which are SpecialTypes without a definition.
+					return ResolveDeclaringType(entityHandle, context).GetDefinition();
 				case HandleKind.MemberReference:
 					var memberReferenceHandle = (MemberReferenceHandle)entityHandle;
 					switch (metadata.GetMemberReference(memberReferenceHandle).GetKind())

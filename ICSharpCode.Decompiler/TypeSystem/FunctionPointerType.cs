@@ -58,17 +58,22 @@ namespace ICSharpCode.Decompiler.TypeSystem
 			{
 				IType paramType = p;
 				ReferenceKind kind = ReferenceKind.None;
-				if (p is ModifiedType modreq)
+				if (p is ModifiedType mod)
 				{
-					if (modreq.Modifier.IsKnownType(KnownAttribute.In))
+					if (mod.Modifier.IsKnownType(KnownAttribute.In))
 					{
 						kind = ReferenceKind.In;
-						paramType = modreq.ElementType;
+						paramType = mod.ElementType;
 					}
-					else if (modreq.Modifier.IsKnownType(KnownAttribute.Out))
+					else if (mod.Modifier.IsKnownType(KnownAttribute.Out))
 					{
 						kind = ReferenceKind.Out;
-						paramType = modreq.ElementType;
+						paramType = mod.ElementType;
+					}
+					else if (mod.Modifier.IsKnownType(KnownAttribute.RequiresLocation))
+					{
+						kind = ReferenceKind.RefReadOnly;
+						paramType = mod.ElementType;
 					}
 				}
 				if (paramType.Kind == TypeKind.ByReference)
@@ -130,6 +135,11 @@ namespace ICSharpCode.Decompiler.TypeSystem
 				// but have them act as if they were aliases for UIntPtr.
 				return module.Compilation.FindType(KnownTypeCode.UIntPtr).GetDefinition();
 			}
+		}
+
+		public override ITypeDefinitionOrUnknown GetDefinitionOrUnknown()
+		{
+			return GetDefinition();
 		}
 
 		public override IType AcceptVisitor(TypeVisitor visitor)

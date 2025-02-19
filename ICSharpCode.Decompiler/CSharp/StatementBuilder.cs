@@ -47,6 +47,8 @@ namespace ICSharpCode.Decompiler.CSharp
 		internal IType currentResultType;
 		internal bool currentIsIterator;
 
+		internal bool EmitAsRefReadOnly;
+
 		public StatementBuilder(IDecompilerTypeSystem typeSystem, ITypeResolveContext decompilationContext,
 			ILFunction currentFunction, DecompilerSettings settings, DecompileRun decompileRun,
 			CancellationToken cancellationToken)
@@ -110,6 +112,17 @@ namespace ICSharpCode.Decompiler.CSharp
 		}
 
 		protected internal override TranslatedStatement VisitStLoc(StLoc inst)
+		{
+			var expr = exprBuilder.Translate(inst);
+			// strip top-level ref on ref re-assignment
+			if (expr.Expression is DirectionExpression dirExpr)
+			{
+				expr = expr.UnwrapChild(dirExpr.Expression);
+			}
+			return new ExpressionStatement(expr).WithILInstruction(inst);
+		}
+
+		protected internal override TranslatedStatement VisitStObj(StObj inst)
 		{
 			var expr = exprBuilder.Translate(inst);
 			// strip top-level ref on ref re-assignment
@@ -197,26 +210,7 @@ namespace ICSharpCode.Decompiler.CSharp
 			var oldCaseLabelMapping = caseLabelMapping;
 			caseLabelMapping = new Dictionary<Block, ConstantResolveResult>();
 
-			TranslatedExpression value;
-			IType type;
-			if (inst.Value is StringToInt strToInt)
-			{
-				value = exprBuilder.Translate(strToInt.Argument)
-					.ConvertTo(
-						typeSystem.FindType(KnownTypeCode.String),
-						exprBuilder,
-						// switch statement does support implicit conversions in general, however, the rules are
-						// not very intuitive and in order to prevent bugs, we emit an explicit cast.
-						allowImplicitConversion: false
-					);
-				type = exprBuilder.compilation.FindType(KnownTypeCode.String);
-			}
-			else
-			{
-				strToInt = null;
-				value = exprBuilder.Translate(inst.Value);
-				type = value.Type;
-			}
+			var (value, type, strToInt) = exprBuilder.TranslateSwitchValue(inst, false);
 
 			IL.SwitchSection defaultSection = inst.GetDefaultSection();
 
@@ -380,8 +374,14 @@ namespace ICSharpCode.Decompiler.CSharp
 					return new YieldBreakStatement().WithILInstruction(inst);
 				else if (!inst.Value.MatchNop())
 				{
+					bool isLambdaOrExprTree = currentFunction.Kind is ILFunctionKind.ExpressionTree or ILFunctionKind.Delegate;
 					var expr = exprBuilder.Translate(inst.Value, typeHint: currentResultType)
 						.ConvertTo(currentResultType, exprBuilder, allowImplicitConversion: true);
+					if (isLambdaOrExprTree && IsPossibleLossOfTypeInformation(expr.Type, currentResultType))
+					{
+						expr = new CastExpression(exprBuilder.ConvertType(currentResultType), expr)
+							.WithRR(new ConversionResolveResult(currentResultType, expr.ResolveResult, Conversion.IdentityConversion)).WithoutILInstruction();
+					}
 					return new ReturnStatement(expr).WithILInstruction(inst);
 				}
 				else
@@ -402,6 +402,19 @@ namespace ICSharpCode.Decompiler.CSharp
 				endContainerLabels.Add(inst.TargetContainer, label);
 			}
 			return new GotoStatement(label).WithILInstruction(inst);
+		}
+
+		private bool IsPossibleLossOfTypeInformation(IType givenType, IType expectedType)
+		{
+			if (NormalizeTypeVisitor.IgnoreNullability.EquivalentTypes(givenType, expectedType))
+				return false;
+			if (expectedType is TupleType { ElementNames.IsEmpty: false })
+				return true;
+			if (expectedType == SpecialType.Dynamic)
+				return true;
+			if (givenType == SpecialType.NullType)
+				return true;
+			return false;
 		}
 
 		protected internal override TranslatedStatement VisitThrow(Throw inst)
@@ -829,6 +842,7 @@ namespace ICSharpCode.Decompiler.CSharp
 						designations.VariableDesignations.Add(ConstructDesignation(subPattern));
 					}
 				}
+				designations.AddAnnotation(matchInstruction);
 				return designations;
 			}
 		}
@@ -962,8 +976,7 @@ namespace ICSharpCode.Decompiler.CSharp
 				return RequiredGetCurrentTransformation.NoForeach;
 			}
 			if (loopBody.Instructions[0] is DeconstructInstruction deconstruction
-				&& singleGetter == deconstruction.Pattern.TestedOperand
-				&& CanBeDeconstructedInForeach(deconstruction, usingContainer, loopContainer))
+				&& CanBeDeconstructedInForeach(deconstruction, singleGetter, usingContainer, loopContainer))
 			{
 				return RequiredGetCurrentTransformation.Deconstruction;
 			}
@@ -992,13 +1005,19 @@ namespace ICSharpCode.Decompiler.CSharp
 			return RequiredGetCurrentTransformation.IntroduceNewVariable;
 		}
 
-		bool CanBeDeconstructedInForeach(DeconstructInstruction deconstruction, BlockContainer usingContainer, BlockContainer loopContainer)
+		bool CanBeDeconstructedInForeach(DeconstructInstruction deconstruction, ILInstruction singleGetter, BlockContainer usingContainer, BlockContainer loopContainer)
 		{
+			ILInstruction testedOperand = deconstruction.Pattern.TestedOperand;
+			if (testedOperand != singleGetter)
+			{
+				if (!(testedOperand is AddressOf addressOf && addressOf.Value == singleGetter))
+					return false;
+			}
 			if (deconstruction.Init.Count > 0)
 				return false;
 			if (deconstruction.Conversions.Instructions.Count > 0)
 				return false;
-			var operandType = deconstruction.Pattern.TestedOperand.InferType(this.typeSystem);
+			var operandType = singleGetter.InferType(this.typeSystem);
 			var expectedType = deconstruction.Pattern.Variable.Type;
 			if (!NormalizeTypeVisitor.TypeErasure.EquivalentTypes(operandType, expectedType))
 				return false;
@@ -1327,6 +1346,32 @@ namespace ICSharpCode.Decompiler.CSharp
 		{
 			var blockStatement = ConvertBlockContainer(new BlockStatement(), container, container.Blocks, isLoop);
 			DeclareLocalFunctions(currentFunction, container, blockStatement);
+			if (currentFunction.Body == container)
+			{
+				if (EmitAsRefReadOnly)
+				{
+					var methodDecl = new MethodDeclaration();
+					if (settings.StaticLocalFunctions)
+					{
+						methodDecl.Modifiers = Modifiers.Static;
+					}
+
+					methodDecl.ReturnType = new ComposedType() { HasReadOnlySpecifier = true, HasRefSpecifier = true, BaseType = new SimpleType("T") };
+					methodDecl.Name = "ILSpyHelper_AsRefReadOnly";
+					methodDecl.TypeParameters.Add(new TypeParameterDeclaration("T"));
+					methodDecl.Parameters.Add(new ParameterDeclaration { ParameterModifier = ReferenceKind.In, Type = new SimpleType("T"), Name = "temp" });
+
+					methodDecl.Body = new BlockStatement();
+					methodDecl.Body.AddChild(new Comment(
+						"ILSpy generated this function to help ensure overload resolution can pick the overload using 'in'"),
+											 Roles.Comment);
+					methodDecl.Body.Add(new ReturnStatement(new DirectionExpression(FieldDirection.Ref, new IdentifierExpression("temp"))));
+
+					blockStatement.Statements.Add(
+						new LocalFunctionDeclarationStatement(methodDecl)
+					);
+				}
+			}
 			return blockStatement;
 		}
 

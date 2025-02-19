@@ -16,7 +16,7 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-using System.Windows;
+using System.Windows.Input;
 
 namespace ICSharpCode.ILSpy.ViewModels
 {
@@ -28,6 +28,10 @@ namespace ICSharpCode.ILSpy.ViewModels
 			this.IsVisible = true;
 		}
 
-		public abstract DataTemplate Template { get; }
+		public KeyGesture ShortcutKey { get; protected set; }
+
+		public string Icon { get; protected set; }
+
+		public ICommand AssociatedCommand { get; set; }
 	}
 }

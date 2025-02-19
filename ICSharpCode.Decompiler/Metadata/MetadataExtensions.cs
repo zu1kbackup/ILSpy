@@ -1,14 +1,31 @@
-﻿using System;
+﻿// Copyright (c) 2018 Siegfried Pammer
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this
+// software and associated documentation files (the "Software"), to deal in the Software
+// without restriction, including without limitation the rights to use, copy, modify, merge,
+// publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons
+// to whom the Software is furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all copies or
+// substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+// PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+// FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+
+using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
-using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
-using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
-using System.Threading.Tasks;
 
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.Decompiler.TypeSystem.Implementation;
@@ -20,33 +37,11 @@ namespace ICSharpCode.Decompiler.Metadata
 {
 	public static class MetadataExtensions
 	{
-		static HashAlgorithm GetHashAlgorithm(this MetadataReader reader)
-		{
-			switch (reader.GetAssemblyDefinition().HashAlgorithm)
-			{
-				case AssemblyHashAlgorithm.None:
-					// only for multi-module assemblies?
-					return SHA1.Create();
-				case AssemblyHashAlgorithm.MD5:
-					return MD5.Create();
-				case AssemblyHashAlgorithm.Sha1:
-					return SHA1.Create();
-				case AssemblyHashAlgorithm.Sha256:
-					return SHA256.Create();
-				case AssemblyHashAlgorithm.Sha384:
-					return SHA384.Create();
-				case AssemblyHashAlgorithm.Sha512:
-					return SHA512.Create();
-				default:
-					return SHA1.Create(); // default?
-			}
-		}
-
 		static string CalculatePublicKeyToken(BlobHandle blob, MetadataReader reader)
 		{
 			// Calculate public key token:
-			// 1. hash the public key using the appropriate algorithm.
-			byte[] publicKeyTokenBytes = reader.GetHashAlgorithm().ComputeHash(reader.GetBlobBytes(blob));
+			// 1. hash the public key (always use SHA1).
+			byte[] publicKeyTokenBytes = SHA1.Create().ComputeHash(reader.GetBlobBytes(blob));
 			// 2. take the last 8 bytes
 			// 3. according to Cecil we need to reverse them, other sources did not mention this.
 			return publicKeyTokenBytes.TakeLast(8).Reverse().ToHexString(8);
@@ -94,25 +89,39 @@ namespace ICSharpCode.Decompiler.Metadata
 
 		public static string GetFullAssemblyName(this SRM.AssemblyReference reference, MetadataReader reader)
 		{
-			string publicKey = "null";
-			if (!reference.PublicKeyOrToken.IsNil)
+			StringBuilder builder = new StringBuilder();
+			builder.Append(reader.GetString(reference.Name));
+			builder.Append(", Version=");
+			builder.Append(reference.Version);
+			builder.Append(", Culture=");
+			if (reference.Culture.IsNil)
 			{
-				if ((reference.Flags & AssemblyFlags.PublicKey) != 0)
-				{
-					publicKey = CalculatePublicKeyToken(reference.PublicKeyOrToken, reader);
-				}
-				else
-				{
-					publicKey = reader.GetBlobBytes(reference.PublicKeyOrToken).ToHexString(8);
-				}
+				builder.Append("neutral");
 			}
-			string properties = "";
+			else
+			{
+				builder.Append(reader.GetString(reference.Culture));
+			}
+
+			if (reference.PublicKeyOrToken.IsNil)
+			{
+				builder.Append(", PublicKeyToken=null");
+			}
+			else if ((reference.Flags & AssemblyFlags.PublicKey) != 0)
+			{
+				builder.Append(", PublicKeyToken=");
+				builder.Append(CalculatePublicKeyToken(reference.PublicKeyOrToken, reader));
+			}
+			else
+			{
+				builder.Append(", PublicKeyToken=");
+				builder.AppendHexString(reader.GetBlobReader(reference.PublicKeyOrToken));
+			}
 			if ((reference.Flags & AssemblyFlags.Retargetable) != 0)
-				properties = ", Retargetable=true";
-			return $"{reader.GetString(reference.Name)}, " +
-				$"Version={reference.Version}, " +
-				$"Culture={(reference.Culture.IsNil ? "neutral" : reader.GetString(reference.Culture))}, " +
-				$"PublicKeyToken={publicKey}{properties}";
+			{
+				builder.Append(", Retargetable=true");
+			}
+			return builder.ToString();
 		}
 
 		public static bool TryGetFullAssemblyName(this SRM.AssemblyReference reference, MetadataReader reader, out string assemblyName)
@@ -138,6 +147,14 @@ namespace ICSharpCode.Decompiler.Metadata
 			foreach (var b in bytes)
 				sb.AppendFormat("{0:x2}", b);
 			return sb.ToString();
+		}
+
+		public static void AppendHexString(this StringBuilder builder, BlobReader reader)
+		{
+			for (int i = 0; i < reader.Length; i++)
+			{
+				builder.AppendFormat("{0:x2}", reader.ReadByte());
+			}
 		}
 
 		public static string ToHexString(this BlobReader reader)
@@ -227,6 +244,10 @@ namespace ICSharpCode.Decompiler.Metadata
 			get => minimalCorlibTypeProvider;
 		}
 
+		/// <summary>
+		/// Converts <see cref="KnownTypeCode"/> to <see cref="PrimitiveTypeCode"/>.
+		/// Returns 0 for known types that are not primitive types (such as <see cref="Span{T}"/>).
+		/// </summary>
 		public static PrimitiveTypeCode ToPrimitiveTypeCode(this KnownTypeCode typeCode)
 		{
 			switch (typeCode)
@@ -268,7 +289,7 @@ namespace ICSharpCode.Decompiler.Metadata
 				case KnownTypeCode.UIntPtr:
 					return PrimitiveTypeCode.UIntPtr;
 				default:
-					throw new ArgumentOutOfRangeException();
+					return 0;
 			}
 		}
 
@@ -358,11 +379,13 @@ namespace ICSharpCode.Decompiler.Metadata
 				yield return Read(row);
 			}
 
-			unsafe (Handle Handle, MethodSemanticsAttributes Semantics, MethodDefinitionHandle Method, EntityHandle Association) Read(int row)
+			(Handle Handle, MethodSemanticsAttributes Semantics, MethodDefinitionHandle Method, EntityHandle Association) Read(int row)
 			{
-				byte* ptr = metadata.MetadataPointer + offset + rowSize * row;
-				int methodDef = methodSmall ? *(ushort*)(ptr + 2) : (int)*(uint*)(ptr + 2);
-				int assocDef = assocSmall ? *(ushort*)(ptr + assocOffset) : (int)*(uint*)(ptr + assocOffset);
+				var span = metadata.AsReadOnlySpan();
+				var methodDefSpan = span.Slice(offset + rowSize * row + 2);
+				int methodDef = methodSmall ? BinaryPrimitives.ReadUInt16LittleEndian(methodDefSpan) : (int)BinaryPrimitives.ReadUInt32LittleEndian(methodDefSpan);
+				var assocSpan = span.Slice(assocOffset);
+				int assocDef = assocSmall ? BinaryPrimitives.ReadUInt16LittleEndian(assocSpan) : (int)BinaryPrimitives.ReadUInt32LittleEndian(assocSpan);
 				EntityHandle propOrEvent;
 				if ((assocDef & 0x1) == 1)
 				{
@@ -372,7 +395,7 @@ namespace ICSharpCode.Decompiler.Metadata
 				{
 					propOrEvent = MetadataTokens.EventDefinitionHandle(assocDef >> 1);
 				}
-				return (MetadataTokens.Handle(0x18000000 | (row + 1)), (MethodSemanticsAttributes)(*(ushort*)ptr), MetadataTokens.MethodDefinitionHandle(methodDef), propOrEvent);
+				return (MetadataTokens.Handle(0x18000000 | (row + 1)), (MethodSemanticsAttributes)(BinaryPrimitives.ReadUInt16LittleEndian(span)), MetadataTokens.MethodDefinitionHandle(methodDef), propOrEvent);
 			}
 		}
 
@@ -385,9 +408,9 @@ namespace ICSharpCode.Decompiler.Metadata
 			}
 		}
 
-		public unsafe static (int Offset, FieldDefinitionHandle FieldDef) GetFieldLayout(this MetadataReader metadata, EntityHandle fieldLayoutHandle)
+		public static (int Offset, FieldDefinitionHandle FieldDef) GetFieldLayout(this MetadataReader metadata, EntityHandle fieldLayoutHandle)
 		{
-			byte* startPointer = metadata.MetadataPointer;
+			var startPointer = metadata.AsReadOnlySpan();
 			int offset = metadata.GetTableMetadataOffset(TableIndex.FieldLayout);
 			int rowSize = metadata.GetTableRowSize(TableIndex.FieldLayout);
 			int rowCount = metadata.GetTableRowCount(TableIndex.FieldLayout);
@@ -396,14 +419,49 @@ namespace ICSharpCode.Decompiler.Metadata
 			bool small = metadata.GetTableRowCount(TableIndex.Field) <= ushort.MaxValue;
 			for (int row = rowCount - 1; row >= 0; row--)
 			{
-				byte* ptr = startPointer + offset + rowSize * row;
-				uint rowNo = small ? *(ushort*)(ptr + 4) : *(uint*)(ptr + 4);
+				ReadOnlySpan<byte> ptr = startPointer.Slice(offset + rowSize * row);
+				var rowNoSpan = ptr.Slice(4);
+				uint rowNo = small ? BinaryPrimitives.ReadUInt16LittleEndian(rowNoSpan) : BinaryPrimitives.ReadUInt32LittleEndian(rowNoSpan);
 				if (fieldRowNo == rowNo)
 				{
-					return (*(int*)ptr, MetadataTokens.FieldDefinitionHandle(fieldRowNo));
+					return (BinaryPrimitives.ReadInt32LittleEndian(ptr), MetadataTokens.FieldDefinitionHandle(fieldRowNo));
 				}
 			}
 			return (0, default);
 		}
+
+		public static ReadOnlySpan<byte> AsReadOnlySpan(this MetadataReader metadataReader)
+		{
+			unsafe
+			{
+				return new(metadataReader.MetadataPointer, metadataReader.MetadataLength);
+			}
+		}
+
+		public static BlobReader AsBlobReader(this MetadataReader metadataReader)
+		{
+			unsafe
+			{
+				return new(metadataReader.MetadataPointer, metadataReader.MetadataLength);
+			}
+		}
+
+		public static uint ReadULEB128(this BinaryReader reader)
+		{
+			uint val = 0;
+			int shift = 0;
+			while (true)
+			{
+				byte b = reader.ReadByte();
+				val |= (b & 0b0111_1111u) << shift;
+				if ((b & 0b1000_0000) == 0)
+					break;
+				shift += 7;
+				if (shift >= 35)
+					throw new OverflowException();
+			}
+			return val;
+		}
+
 	}
 }

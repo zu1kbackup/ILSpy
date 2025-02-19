@@ -17,7 +17,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 using System;
-using System.ComponentModel.Composition;
+using System.Composition;
 using System.Windows.Input;
 
 namespace ICSharpCode.ILSpy
@@ -52,9 +52,10 @@ namespace ICSharpCode.ILSpy
 	#region Main Menu
 	public interface IMainMenuCommandMetadata
 	{
+		string MenuID { get; }
 		string MenuIcon { get; }
 		string Header { get; }
-		string Menu { get; }
+		string ParentMenuID { get; }
 		string MenuCategory { get; }
 		string InputGestureText { get; }
 		bool IsEnabled { get; }
@@ -65,42 +66,48 @@ namespace ICSharpCode.ILSpy
 	[AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
 	public class ExportMainMenuCommandAttribute : ExportAttribute, IMainMenuCommandMetadata
 	{
-		bool isEnabled = true;
-
 		public ExportMainMenuCommandAttribute()
 			: base("MainMenuCommand", typeof(ICommand))
 		{
 		}
-
+		/// <summary>
+		/// Gets/Sets the ID of this menu item. Menu entries are not required to have an ID,
+		/// however, setting it allows to declare nested menu structures.
+		/// The built-in menus have the IDs "_File", "_View", "_Window" and "_Help".
+		/// Plugin authors are advised to use GUIDs as identifiers to prevent conflicts.
+		/// <para/>
+		/// NOTE: Defining cycles (for example by accidentally setting <see cref="MenuID"/> equal to <see cref="ParentMenuID"/>)
+		/// will lead to a stack-overflow and crash of ILSpy at startup.
+		/// </summary>
+		public string MenuID { get; set; }
 		public string MenuIcon { get; set; }
 		public string Header { get; set; }
-		public string Menu { get; set; }
+		/// <summary>
+		/// Gets/Sets the parent of this menu item. All menu items sharing the same parent will be displayed as sub-menu items.
+		/// If this property is set to <see langword="null"/>, the menu item is displayed in the top-level menu.
+		/// The built-in menus have the IDs "_File", "_View", "_Window" and "_Help".
+		/// <para/>
+		/// NOTE: Defining cycles (for example by accidentally setting <see cref="MenuID"/> equal to <see cref="ParentMenuID"/>)
+		/// will lead to a stack-overflow and crash of ILSpy at startup.
+		/// </summary>
+		public string ParentMenuID { get; set; }
 		public string MenuCategory { get; set; }
 		public string InputGestureText { get; set; }
-		public bool IsEnabled {
-			get { return isEnabled; }
-			set { isEnabled = value; }
-		}
+		public bool IsEnabled { get; set; } = true;
 		public double MenuOrder { get; set; }
 	}
 	#endregion
 
 	#region Tool Panes
-	public interface IToolPaneMetadata
-	{
-		string ContentId { get; }
-	}
 
 	[MetadataAttribute]
-	[AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
-	public class ExportToolPaneAttribute : ExportAttribute, IToolPaneMetadata
+	[AttributeUsage(AttributeTargets.Class)]
+	public class ExportToolPaneAttribute : ExportAttribute
 	{
 		public ExportToolPaneAttribute()
 			: base("ToolPane", typeof(ViewModels.ToolPaneModel))
 		{
 		}
-
-		public string ContentId { get; set; }
 	}
 	#endregion
 }

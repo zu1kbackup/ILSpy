@@ -24,29 +24,25 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#nullable enable
+
+using ICSharpCode.Decompiler.TypeSystem;
 
 namespace ICSharpCode.Decompiler.CSharp.Syntax
 {
-	public enum ParameterModifier
-	{
-		None,
-		Ref,
-		Out,
-		Params,
-		In
-	}
-
 	public class ParameterDeclaration : AstNode
 	{
 		public static readonly Role<AttributeSection> AttributeRole = EntityDeclaration.AttributeRole;
-		public static readonly TokenRole RefModifierRole = new TokenRole("ref");
-		public static readonly TokenRole OutModifierRole = new TokenRole("out");
-		public static readonly TokenRole ParamsModifierRole = new TokenRole("params");
 		public static readonly TokenRole ThisModifierRole = new TokenRole("this");
+		public static readonly TokenRole ScopedRefRole = new TokenRole("scoped");
+		public static readonly TokenRole RefModifierRole = new TokenRole("ref");
+		public static readonly TokenRole ReadonlyModifierRole = ComposedType.ReadonlyRole;
+		public static readonly TokenRole OutModifierRole = new TokenRole("out");
 		public static readonly TokenRole InModifierRole = new TokenRole("in");
+		public static readonly TokenRole ParamsModifierRole = new TokenRole("params");
 
 		#region PatternPlaceholder
-		public static implicit operator ParameterDeclaration(PatternMatching.Pattern pattern)
+		public static implicit operator ParameterDeclaration?(PatternMatching.Pattern pattern)
 		{
 			return pattern != null ? new PatternPlaceholder(pattern) : null;
 		}
@@ -79,7 +75,7 @@ namespace ICSharpCode.Decompiler.CSharp.Syntax
 				return visitor.VisitPatternPlaceholder(this, child, data);
 			}
 
-			protected internal override bool DoMatch(AstNode other, PatternMatching.Match match)
+			protected internal override bool DoMatch(AstNode? other, PatternMatching.Match match)
 			{
 				return child.DoMatch(other, match);
 			}
@@ -91,17 +87,15 @@ namespace ICSharpCode.Decompiler.CSharp.Syntax
 		}
 		#endregion
 
-		public override NodeType NodeType {
-			get {
-				return NodeType.Unknown;
-			}
-		}
+		public override NodeType NodeType => NodeType.Unknown;
 
 		public AstNodeCollection<AttributeSection> Attributes {
 			get { return GetChildrenByRole(AttributeRole); }
 		}
 
 		bool hasThisModifier;
+		bool isParams;
+		bool isScopedRef;
 
 		public CSharpTokenNode ThisKeyword {
 			get {
@@ -121,9 +115,25 @@ namespace ICSharpCode.Decompiler.CSharp.Syntax
 			}
 		}
 
-		ParameterModifier parameterModifier;
+		public bool IsParams {
+			get { return isParams; }
+			set {
+				ThrowIfFrozen();
+				isParams = value;
+			}
+		}
 
-		public ParameterModifier ParameterModifier {
+		public bool IsScopedRef {
+			get { return isScopedRef; }
+			set {
+				ThrowIfFrozen();
+				isScopedRef = value;
+			}
+		}
+
+		ReferenceKind parameterModifier;
+
+		public ReferenceKind ParameterModifier {
 			get { return parameterModifier; }
 			set {
 				ThrowIfFrozen();
@@ -178,9 +188,9 @@ namespace ICSharpCode.Decompiler.CSharp.Syntax
 			return visitor.VisitParameterDeclaration(this, data);
 		}
 
-		protected internal override bool DoMatch(AstNode other, PatternMatching.Match match)
+		protected internal override bool DoMatch(AstNode? other, PatternMatching.Match match)
 		{
-			ParameterDeclaration o = other as ParameterDeclaration;
+			var o = other as ParameterDeclaration;
 			return o != null && this.Attributes.DoMatch(o.Attributes, match) && this.ParameterModifier == o.ParameterModifier
 				&& this.Type.DoMatch(o.Type, match) && MatchString(this.Name, o.Name)
 				&& this.DefaultExpression.DoMatch(o.DefaultExpression, match);
@@ -188,19 +198,6 @@ namespace ICSharpCode.Decompiler.CSharp.Syntax
 
 		public ParameterDeclaration()
 		{
-		}
-
-		public ParameterDeclaration(AstType type, string name, ParameterModifier modifier = ParameterModifier.None)
-		{
-			Type = type;
-			Name = name;
-			ParameterModifier = modifier;
-		}
-
-		public ParameterDeclaration(string name, ParameterModifier modifier = ParameterModifier.None)
-		{
-			Name = name;
-			ParameterModifier = modifier;
 		}
 
 		public new ParameterDeclaration Clone()

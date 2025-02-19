@@ -17,7 +17,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 using System;
-using System.ComponentModel.Composition;
+using System.Composition;
 using System.IO;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
@@ -26,13 +26,15 @@ using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.ILSpy.Properties;
 using ICSharpCode.ILSpy.TextView;
 using ICSharpCode.ILSpy.ViewModels;
+using ICSharpCode.ILSpyX.Abstractions;
 
 namespace ICSharpCode.ILSpy.TreeNodes
 {
 	[Export(typeof(IResourceNodeFactory))]
+	[Shared]
 	sealed class IconResourceNodeFactory : IResourceNodeFactory
 	{
-		public ILSpyTreeNode CreateNode(Resource resource)
+		public ITreeNode CreateNode(Resource resource)
 		{
 			if (resource.Name.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
 			{
@@ -59,7 +61,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 				using var data = OpenStream();
 				if (data == null)
 					return false;
-				IconBitmapDecoder decoder = new IconBitmapDecoder(data, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.None);
+				IconBitmapDecoder decoder = new IconBitmapDecoder(data, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
 				foreach (var frame in decoder.Frames)
 				{
 					output.Write(String.Format("{0}x{1}, {2} bit: ", frame.PixelHeight, frame.PixelWidth, frame.Thumbnail.Format.BitsPerPixel));

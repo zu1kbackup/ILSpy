@@ -80,7 +80,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			// Disable the transform if we are decompiling a display-class or local function method:
 			// This happens if a local function or display class is selected in the ILSpy tree view.
 			if (IsLocalFunctionMethod(function.Method, context) || IsLocalFunctionDisplayClass(
-					function.Method.ParentModule.PEFile,
+					function.Method.ParentModule.MetadataFile,
 					(TypeDefinitionHandle)function.Method.DeclaringTypeDefinition.MetadataToken,
 					context)
 				)
@@ -462,7 +462,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			else
 			{
 				var ilReader = context.CreateILReader();
-				var body = context.PEFile.Reader.GetMethodBody(methodDefinition.RelativeVirtualAddress);
+				var body = context.PEFile.GetMethodBody(methodDefinition.RelativeVirtualAddress);
 
 				function = ilReader.ReadIL((MethodDefinitionHandle)targetMethod.MetadataToken, body,
 					genericContext.GetValueOrDefault(), ILFunctionKind.LocalFunction,
@@ -493,7 +493,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			}
 			if (targetMethod.TypeParameters.Count > 0)
 			{
-				var lastParams = targetMethod.Parameters.Where(p => IsClosureParameter(p, this.resolveContext)).SelectMany(p => UnwrapByRef(p.Type).TypeArguments)
+				var lastParams = targetMethod.Parameters.Where(p => IsClosureParameter(p, this.resolveContext)).SelectMany(p => p.Type.UnwrapByRef().TypeArguments)
 					.Select(pt => (int?)targetMethod.TypeParameters.IndexOf(pt)).DefaultIfEmpty().Max();
 				if (lastParams != null && lastParams.GetValueOrDefault() + 1 > skipCount)
 					skipCount = lastParams.GetValueOrDefault() + 1;
@@ -556,21 +556,12 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 
 		internal static bool IsClosureParameter(IParameter parameter, ITypeResolveContext context)
 		{
-			if (!parameter.IsRef)
+			if (parameter.Type is not ByReferenceType brt)
 				return false;
-			var type = ((ByReferenceType)parameter.Type).ElementType.GetDefinition();
+			var type = brt.ElementType.GetDefinition();
 			return type != null
 				&& type.Kind == TypeKind.Struct
 				&& TransformDisplayClassUsage.IsPotentialClosure(context.CurrentTypeDefinition, type);
-		}
-
-		static IType UnwrapByRef(IType type)
-		{
-			if (type is ByReferenceType byRef)
-			{
-				type = byRef.ElementType;
-			}
-			return type;
 		}
 
 		internal static ILInstruction GetStatement(ILInstruction inst)
@@ -733,7 +724,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 
 			ILInstruction GetClosureInitializer(ILVariable variable)
 			{
-				var type = UnwrapByRef(variable.Type).GetDefinition();
+				var type = variable.Type.UnwrapByRef().GetDefinition();
 				if (type == null)
 					return null;
 				if (variable.Kind == VariableKind.Parameter)
@@ -764,10 +755,10 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 		{
 			if (method.MetadataToken.IsNil)
 				return false;
-			return IsLocalFunctionMethod(method.ParentModule.PEFile, (MethodDefinitionHandle)method.MetadataToken, context);
+			return IsLocalFunctionMethod(method.ParentModule.MetadataFile, (MethodDefinitionHandle)method.MetadataToken, context);
 		}
 
-		public static bool IsLocalFunctionMethod(PEFile module, MethodDefinitionHandle methodHandle, ILTransformContext context = null)
+		public static bool IsLocalFunctionMethod(MetadataFile module, MethodDefinitionHandle methodHandle, ILTransformContext context = null)
 		{
 			if (context != null && context.PEFile != module)
 				return false;
@@ -785,7 +776,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			return true;
 		}
 
-		public static bool LocalFunctionNeedsAccessibilityChange(PEFile module, MethodDefinitionHandle methodHandle)
+		public static bool LocalFunctionNeedsAccessibilityChange(MetadataFile module, MethodDefinitionHandle methodHandle)
 		{
 			if (!IsLocalFunctionMethod(module, methodHandle))
 				return false;
@@ -806,7 +797,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			return false;
 		}
 
-		public static bool IsLocalFunctionDisplayClass(PEFile module, TypeDefinitionHandle typeHandle, ILTransformContext context = null)
+		public static bool IsLocalFunctionDisplayClass(MetadataFile module, TypeDefinitionHandle typeHandle, ILTransformContext context = null)
 		{
 			if (context != null && context.PEFile != module)
 				return false;
@@ -827,7 +818,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				if (!IsLocalFunctionMethod(module, method, context))
 					continue;
 				var md = metadata.GetMethodDefinition(method);
-				if (md.DecodeSignature(new FindTypeDecoder(typeHandle), default).ParameterTypes.Any())
+				if (md.DecodeSignature(new FindTypeDecoder(typeHandle, module), default).ParameterTypes.Any())
 					return true;
 			}
 
@@ -850,43 +841,6 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			callerName = match.Groups[1].Value;
 			functionName = match.Groups[2].Value;
 			return match.Success;
-		}
-
-		struct FindTypeDecoder : ISignatureTypeProvider<bool, Unit>
-		{
-			readonly TypeDefinitionHandle handle;
-
-			public FindTypeDecoder(TypeDefinitionHandle handle)
-			{
-				this.handle = handle;
-			}
-
-			public bool GetArrayType(bool elementType, ArrayShape shape) => elementType;
-			public bool GetByReferenceType(bool elementType) => elementType;
-			public bool GetFunctionPointerType(MethodSignature<bool> signature) => false;
-			public bool GetGenericInstantiation(bool genericType, ImmutableArray<bool> typeArguments) => genericType;
-			public bool GetGenericMethodParameter(Unit genericContext, int index) => false;
-			public bool GetGenericTypeParameter(Unit genericContext, int index) => false;
-			public bool GetModifiedType(bool modifier, bool unmodifiedType, bool isRequired) => unmodifiedType;
-			public bool GetPinnedType(bool elementType) => elementType;
-			public bool GetPointerType(bool elementType) => elementType;
-			public bool GetPrimitiveType(PrimitiveTypeCode typeCode) => false;
-			public bool GetSZArrayType(bool elementType) => false;
-
-			public bool GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind)
-			{
-				return this.handle == handle;
-			}
-
-			public bool GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind)
-			{
-				return false;
-			}
-
-			public bool GetTypeFromSpecification(MetadataReader reader, Unit genericContext, TypeSpecificationHandle handle, byte rawTypeKind)
-			{
-				return reader.GetTypeSpecification(handle).DecodeSignature(this, genericContext);
-			}
 		}
 
 		class FindRefStructParameters : ISignatureTypeProvider<TypeDefinitionHandle, Unit>

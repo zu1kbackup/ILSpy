@@ -18,6 +18,7 @@
 
 #nullable enable
 
+using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
@@ -26,12 +27,32 @@ namespace ICSharpCode.Decompiler.TypeSystem
 	/// <remarks>
 	/// Should match order in <see cref="CSharp.Syntax.FieldDirection"/>.
 	/// </remarks>
-	public enum ReferenceKind
+	public enum ReferenceKind : byte
 	{
 		None,
 		Out,
 		Ref,
-		In
+		In,
+		RefReadOnly,
+	}
+
+	public struct LifetimeAnnotation
+	{
+		/// <summary>
+		/// C# 11 scoped annotation: "scoped ref" (ScopedRefAttribute)
+		/// </summary>
+		public bool ScopedRef {
+#pragma warning disable 618
+			get { return RefScoped; }
+			set { RefScoped = value; }
+#pragma warning restore 618
+		}
+
+		[Obsolete("Use ScopedRef property instead of directly accessing this field")]
+		public bool RefScoped;
+
+		[Obsolete("C# 11 preview: \"ref scoped\" no longer supported")]
+		public bool ValueScoped;
 	}
 
 	public interface IParameter : IVariable
@@ -47,19 +68,9 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		ReferenceKind ReferenceKind { get; }
 
 		/// <summary>
-		/// Gets whether this parameter is a C# 'ref' parameter.
+		/// C# 11 scoped annotation.
 		/// </summary>
-		bool IsRef { get; }
-
-		/// <summary>
-		/// Gets whether this parameter is a C# 'out' parameter.
-		/// </summary>
-		bool IsOut { get; }
-
-		/// <summary>
-		/// Gets whether this parameter is a C# 'in' parameter.
-		/// </summary>
-		bool IsIn { get; }
+		LifetimeAnnotation Lifetime { get; }
 
 		/// <summary>
 		/// Gets whether this parameter is a C# 'params' parameter.

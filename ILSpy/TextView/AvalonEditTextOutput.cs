@@ -260,7 +260,7 @@ namespace ICSharpCode.ILSpy.TextView
 			references.Add(new ReferenceSegment { StartOffset = start, EndOffset = end, Reference = opCode });
 		}
 
-		public void WriteReference(PEFile module, Handle handle, string text, string protocol = "decompile", bool isDefinition = false)
+		public void WriteReference(MetadataFile metadata, Handle handle, string text, string protocol = "decompile", bool isDefinition = false)
 		{
 			WriteIndent();
 			int start = this.TextLength;
@@ -268,9 +268,9 @@ namespace ICSharpCode.ILSpy.TextView
 			int end = this.TextLength;
 			if (isDefinition)
 			{
-				this.DefinitionLookup.AddDefinition((module, handle), this.TextLength);
+				this.DefinitionLookup.AddDefinition((metadata, handle), this.TextLength);
 			}
-			references.Add(new ReferenceSegment { StartOffset = start, EndOffset = end, Reference = new EntityReference(module, handle, protocol), IsDefinition = isDefinition });
+			references.Add(new ReferenceSegment { StartOffset = start, EndOffset = end, Reference = new EntityReference(metadata, handle, protocol), IsDefinition = isDefinition });
 		}
 
 		public void WriteReference(IType type, string text, bool isDefinition = false)
@@ -312,14 +312,15 @@ namespace ICSharpCode.ILSpy.TextView
 			references.Add(new ReferenceSegment { StartOffset = start, EndOffset = end, Reference = reference, IsLocal = true, IsDefinition = isDefinition });
 		}
 
-		public void MarkFoldStart(string collapsedText = "...", bool defaultCollapsed = false)
+		public void MarkFoldStart(string collapsedText = "...", bool defaultCollapsed = false, bool isDefinition = false)
 		{
 			WriteIndent();
 			openFoldings.Push((
 				new NewFolding {
 					StartOffset = this.TextLength,
 					Name = collapsedText,
-					DefaultClosed = defaultCollapsed
+					DefaultClosed = defaultCollapsed,
+					IsDefinition = isDefinition,
 				}, lineNumber));
 		}
 

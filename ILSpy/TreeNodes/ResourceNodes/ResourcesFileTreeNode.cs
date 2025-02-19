@@ -19,26 +19,29 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.ComponentModel.Composition;
+using System.Composition;
 using System.IO;
 using System.Linq;
 
 using ICSharpCode.Decompiler;
+using ICSharpCode.Decompiler.CSharp.ProjectDecompiler;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.Util;
 using ICSharpCode.ILSpy.Controls;
 using ICSharpCode.ILSpy.Properties;
 using ICSharpCode.ILSpy.TextView;
 using ICSharpCode.ILSpy.ViewModels;
+using ICSharpCode.ILSpyX.Abstractions;
 
 using Microsoft.Win32;
 
 namespace ICSharpCode.ILSpy.TreeNodes
 {
 	[Export(typeof(IResourceNodeFactory))]
+	[Shared]
 	sealed class ResourcesFileTreeNodeFactory : IResourceNodeFactory
 	{
-		public ILSpyTreeNode CreateNode(Resource resource)
+		public ITreeNode CreateNode(Resource resource)
 		{
 			if (resource.Name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
 			{
@@ -53,7 +56,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 		}
 	}
 
-	sealed class ResourcesFileTreeNode : ResourceTreeNode
+	sealed class ResourcesFileTreeNode : ResourceTreeNode, IResourcesFileTreeNode
 	{
 		readonly ICollection<KeyValuePair<string, string>> stringTableEntries = new ObservableCollection<KeyValuePair<string, string>>();
 		readonly ICollection<SerializedObjectRepresentation> otherEntries = new ObservableCollection<SerializedObjectRepresentation>();
@@ -129,7 +132,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			if (s == null)
 				return false;
 			SaveFileDialog dlg = new SaveFileDialog();
-			dlg.FileName = DecompilerTextView.CleanUpName(Resource.Name);
+			dlg.FileName = Path.GetFileName(WholeProjectDecompiler.SanitizeFileName(Resource.Name));
 			dlg.Filter = Resources.ResourcesFileFilter;
 			if (dlg.ShowDialog() == true)
 			{
@@ -173,7 +176,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 		{
 			EnsureLazyChildren();
 			base.Decompile(language, output, options);
-			var textView = (DecompilerTextView)Docking.DockWorkspace.Instance.ActiveTabPage.Content;
+			var textView = (DecompilerTextView)DockWorkspace.ActiveTabPage.Content;
 			if (stringTableEntries.Count != 0)
 			{
 				ISmartTextOutput smartOutput = output as ISmartTextOutput;

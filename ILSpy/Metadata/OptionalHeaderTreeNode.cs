@@ -24,8 +24,10 @@ using System.Windows.Data;
 
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.Metadata;
-using ICSharpCode.ILSpy.TextView;
 using ICSharpCode.ILSpy.TreeNodes;
+using ICSharpCode.ILSpyX.Extensions;
+
+using TomsToolbox.Essentials;
 
 namespace ICSharpCode.ILSpy.Metadata
 {
@@ -40,7 +42,7 @@ namespace ICSharpCode.ILSpy.Metadata
 
 		public override object Text => "Optional Header";
 
-		public override object Icon => Images.Literal;
+		public override object Icon => Images.Header;
 
 		public override bool View(ViewModels.TabPageModel tabPage)
 		{

@@ -123,7 +123,7 @@ namespace ICSharpCode.Decompiler
 			}
 		}
 
-		public void WriteReference(PEFile module, Handle handle, string text, string protocol = "decompile", bool isDefinition = false)
+		public void WriteReference(MetadataFile module, Handle handle, string text, string protocol = "decompile", bool isDefinition = false)
 		{
 			Write(text);
 		}
@@ -143,7 +143,7 @@ namespace ICSharpCode.Decompiler
 			Write(text);
 		}
 
-		void ITextOutput.MarkFoldStart(string collapsedText, bool defaultCollapsed)
+		void ITextOutput.MarkFoldStart(string collapsedText, bool defaultCollapsed, bool isDefinition)
 		{
 		}
 
@@ -190,7 +190,7 @@ namespace ICSharpCode.Decompiler
 			actions.Add(target => target.MarkFoldEnd());
 		}
 
-		public void MarkFoldStart(string collapsedText = "...", bool defaultCollapsed = false)
+		public void MarkFoldStart(string collapsedText = "...", bool defaultCollapsed = false, bool isDefinition = false)
 		{
 			actions.Add(target => target.MarkFoldStart(collapsedText, defaultCollapsed));
 		}
@@ -225,7 +225,7 @@ namespace ICSharpCode.Decompiler
 			actions.Add(target => target.WriteReference(opCode));
 		}
 
-		public void WriteReference(PEFile module, Handle handle, string text, string protocol = "decompile", bool isDefinition = false)
+		public void WriteReference(MetadataFile module, Handle handle, string text, string protocol = "decompile", bool isDefinition = false)
 		{
 			actions.Add(target => target.WriteReference(module, handle, text, protocol, isDefinition));
 		}

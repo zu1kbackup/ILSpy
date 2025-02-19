@@ -186,6 +186,9 @@ Are you sure you want to continue?</value>
   <data name="Checking" xml:space="preserve">
     <value>Checking...</value>
   </data>
+  <data name="ClearAssemblyList" xml:space="preserve">
+    <value>Clear assembly list</value>
+  </data>
   <data name="Close" xml:space="preserve">
     <value>Close</value>
   </data>
@@ -207,6 +210,9 @@ Are you sure you want to continue?</value>
   <data name="Create" xml:space="preserve">
     <value>Create</value>
   </data>
+  <data name="CreatingDiagram" xml:space="preserve">
+    <value>Creating diagram...</value>
+  </data>
   <data name="CultureLabel" xml:space="preserve">
     <value>Culture</value>
   </data>
@@ -221,9 +227,6 @@ Are you sure you want to continue?</value>
   </data>
   <data name="DEBUGDumpPDBAsXML" xml:space="preserve">
     <value>DEBUG -- Dump PDB as XML</value>
-  </data>
-  <data name="DarkMode" xml:space="preserve">
-    <value>Dark Mode</value>
   </data>
   <data name="DebugSteps" xml:space="preserve">
     <value>Debug Steps</value>
@@ -270,6 +273,9 @@ Are you sure you want to continue?</value>
   <data name="DecompilerSettings.AlwaysUseBraces" xml:space="preserve">
     <value>Always use braces</value>
   </data>
+  <data name="DecompilerSettings.AlwaysUseGlobal" xml:space="preserve">
+    <value>Always fully qualify namespaces using the "global::" prefix</value>
+  </data>
   <data name="DecompilerSettings.ApplyWindowsRuntimeProjectionsOnLoadedAssemblies" xml:space="preserve">
     <value>Apply Windows Runtime projections on loaded assemblies</value>
   </data>
@@ -278,6 +284,12 @@ Are you sure you want to continue?</value>
   </data>
   <data name="DecompilerSettings.AsyncEnumerator" xml:space="preserve">
     <value>Decompile async IAsyncEnumerator methods</value>
+  </data>
+  <data name="DecompilerSettings.AutoLoadAssemblyReferences" xml:space="preserve">
+    <value>Automatically load assembly references</value>
+  </data>
+  <data name="DecompilerSettings.CheckedOperators" xml:space="preserve">
+    <value>User-defined checked operators</value>
   </data>
   <data name="DecompilerSettings.DecompileAnonymousMethodsLambdas" xml:space="preserve">
     <value>Decompile anonymous methods/lambdas</value>
@@ -345,6 +357,9 @@ Are you sure you want to continue?</value>
   <data name="DecompilerSettings.FSpecificOptions" xml:space="preserve">
     <value>F#-specific options</value>
   </data>
+  <data name="DecompilerSettings.FileScopedNamespaces" xml:space="preserve">
+    <value>Use file-scoped namespace declarations</value>
+  </data>
   <data name="DecompilerSettings.ForStatement" xml:space="preserve">
     <value>Transform to for, if possible</value>
   </data>
@@ -387,14 +402,23 @@ Are you sure you want to continue?</value>
   <data name="DecompilerSettings.NullableReferenceTypes" xml:space="preserve">
     <value>Nullable reference types</value>
   </data>
+  <data name="DecompilerSettings.NumericIntPtr" xml:space="preserve">
+    <value>Treat (U)IntPtr as n(u)int</value>
+  </data>
   <data name="DecompilerSettings.ObjectCollectionInitializerExpressions" xml:space="preserve">
     <value>Object/collection initializer expressions</value>
   </data>
   <data name="DecompilerSettings.Other" xml:space="preserve">
     <value>Other</value>
   </data>
+  <data name="DecompilerSettings.PatternCombinators" xml:space="preserve">
+    <value>Pattern combinators (and, or, not)</value>
+  </data>
   <data name="DecompilerSettings.PatternMatching" xml:space="preserve">
     <value>Use pattern matching expressions</value>
+  </data>
+  <data name="DecompilerSettings.ProjectExport" xml:space="preserve">
+    <value>Project export</value>
   </data>
   <data name="DecompilerSettings.Ranges" xml:space="preserve">
     <value>Ranges</value>
@@ -403,7 +427,19 @@ Are you sure you want to continue?</value>
     <value>Read-only methods</value>
   </data>
   <data name="DecompilerSettings.RecordClasses" xml:space="preserve">
-    <value>Records</value>
+    <value>Record classes</value>
+  </data>
+  <data name="DecompilerSettings.RecordStructs" xml:space="preserve">
+    <value>Record structs</value>
+  </data>
+  <data name="DecompilerSettings.RecursivePatternMatching" xml:space="preserve">
+    <value>Recursive pattern matching</value>
+  </data>
+  <data name="DecompilerSettings.RefReadOnlyParameters" xml:space="preserve">
+    <value>'ref readonly' parameters</value>
+  </data>
+  <data name="DecompilerSettings.RelationalPatterns" xml:space="preserve">
+    <value>Relational patterns</value>
   </data>
   <data name="DecompilerSettings.RemoveDeadAndSideEffectFreeCodeUseWithCaution" xml:space="preserve">
     <value>Remove dead and side effect free code (use with caution!)</value>
@@ -413,6 +449,12 @@ Are you sure you want to continue?</value>
   </data>
   <data name="DecompilerSettings.RemoveOptionalArgumentsIfPossible" xml:space="preserve">
     <value>Remove optional arguments, if possible</value>
+  </data>
+  <data name="DecompilerSettings.RequiredMembers" xml:space="preserve">
+    <value>Required members</value>
+  </data>
+  <data name="DecompilerSettings.ScopedRef" xml:space="preserve">
+    <value>'scoped' lifetime annotation</value>
   </data>
   <data name="DecompilerSettings.SeparateLocalVariableDeclarations" xml:space="preserve">
     <value>Separate local variable declarations and initializers (int x = 5; -&gt; int x; x = 5;), if possible</value>
@@ -428,6 +470,12 @@ Are you sure you want to continue?</value>
   </data>
   <data name="DecompilerSettings.SwitchExpressions" xml:space="preserve">
     <value>Switch expressions</value>
+  </data>
+  <data name="DecompilerSettings.SwitchOnReadOnlySpanChar" xml:space="preserve">
+    <value>Use switch on (ReadOnly)Span&lt;char&gt;</value>
+  </data>
+  <data name="DecompilerSettings.UnsignedRightShift" xml:space="preserve">
+    <value>Unsigned right shift (&gt;&gt;&gt;)</value>
   </data>
   <data name="DecompilerSettings.UseDiscards" xml:space="preserve">
     <value>Use discards</value>
@@ -459,6 +507,9 @@ Are you sure you want to continue?</value>
   <data name="DecompilerSettings.UseNamedArguments" xml:space="preserve">
     <value>Use named arguments</value>
   </data>
+  <data name="DecompilerSettings.UseNestedDirectoriesForNamespaces" xml:space="preserve">
+    <value>Use nested directories for namespaces</value>
+  </data>
   <data name="DecompilerSettings.UseNonTrailingNamedArguments" xml:space="preserve">
     <value>Use non-trailing named arguments</value>
   </data>
@@ -467,6 +518,9 @@ Are you sure you want to continue?</value>
   </data>
   <data name="DecompilerSettings.UsePatternBasedFixedStatement" xml:space="preserve">
     <value>Use pattern-based fixed statement</value>
+  </data>
+  <data name="DecompilerSettings.UsePrimaryConstructorDecompilerSettings.SyntaxForNonRecordTypes" xml:space="preserve">
+    <value>Use primary constructor syntax for non-record types</value>
   </data>
   <data name="DecompilerSettings.UsePrimaryConstructorSyntax" xml:space="preserve">
     <value>Use primary constructor  syntax with records</value>
@@ -491,6 +545,9 @@ Are you sure you want to continue?</value>
   </data>
   <data name="DecompilerSettings.UseVariableNamesFromDebugSymbolsIfAvailable" xml:space="preserve">
     <value>Use variable names from debug symbols, if available</value>
+  </data>
+  <data name="DecompilerSettings.Utf8StringLiterals" xml:space="preserve">
+    <value>UTF-8 string literals</value>
   </data>
   <data name="DecompilerSettings.VBSpecificOptions" xml:space="preserve">
     <value>VB-specific options</value>
@@ -518,6 +575,9 @@ Are you sure you want to continue?</value>
   </data>
   <data name="DisplaySettingsPanel_Font" xml:space="preserve">
     <value>Font:</value>
+  </data>
+  <data name="DisplaySettingsPanel_Theme" xml:space="preserve">
+    <value>Theme:</value>
   </data>
   <data name="Download" xml:space="preserve">
     <value>Download</value>
@@ -621,6 +681,9 @@ Are you sure you want to continue?</value>
   <data name="ManageAssembly_Lists" xml:space="preserve">
     <value>Manage assembly _lists...</value>
   </data>
+  <data name="Metadata" xml:space="preserve">
+    <value>Metadata</value>
+  </data>
   <data name="Misc" xml:space="preserve">
     <value>Misc</value>
   </data>
@@ -686,7 +749,7 @@ Please disable all filters that might hide the item (i.e. activate "View &gt; Sh
     <value>Portable PDB|*.pdb|All files|*.*</value>
   </data>
   <data name="ProjectExportFormatChangeSettingHint" xml:space="preserve">
-    <value>You can change this by toggling the setting at Options &gt; Decompiler &gt; Other &gt; Use new SDK style format for generated project files (*.csproj).</value>
+    <value>You can change this by toggling the setting at Options &gt; Decompiler &gt; Project export &gt; Use new SDK style format for generated project files (*.csproj).</value>
   </data>
   <data name="ProjectExportFormatNonSDKHint" xml:space="preserve">
     <value>A Non-SDK project was generated. Learn more at https://docs.microsoft.com/en-us/nuget/resources/check-project-format.</value>
@@ -695,9 +758,11 @@ Please disable all filters that might hide the item (i.e. activate "View &gt; Sh
     <value>A SDK-style project was generated. Learn more at https://docs.microsoft.com/en-us/nuget/resources/check-project-format.</value>
   </data>
   <data name="ProjectExportPathTooLong" xml:space="preserve">
-    <value>Failed to decompile the assemblies {0} because the namespace directory structure is nested too deep.
+    <value>Failed to decompile the assemblies {0} because the namespace names are too long or the directory structure is nested too deep.
 
-If you are using Windows 10.0.14393 (Windows 10 version 1607) or later, you can enable "Long path support" by creating a REG_DWORD registry key named "LongPathsEnabled" with value 0x1 at "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem" (see https://docs.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation for more information).</value>
+If you are using Windows 10.0.14393 (Windows 10 version 1607) or later, you can enable "Long path support" by creating a REG_DWORD registry key named "LongPathsEnabled" with value 0x1 at "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem" (see https://docs.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation for more information).
+
+If this does not solve the problem and your system supports long paths, you can try to use a nested path structure. You can change this by toggling the setting at Options &gt; Decompiler &gt; Project export &gt; Use nested directories for namespaces. This helps because even on "long-path-aware" platforms, the length of a directory name is limited, on Windows/NTFS this is 255 characters.</value>
   </data>
   <data name="PropertyManuallyMissingReferencesListLoadedAssemblies" xml:space="preserve">
     <value>for ex. property getter/setter access. To get optimal decompilation results, please manually add the missing references to the list of loaded assemblies.</value>
@@ -751,6 +816,12 @@ Do you want to continue?</value>
   </data>
   <data name="SaveCode" xml:space="preserve">
     <value>Save Code</value>
+  </data>
+  <data name="ScopeSearchToThisAssembly" xml:space="preserve">
+    <value>Scope search to this assembly</value>
+  </data>
+  <data name="ScopeSearchToThisNamespace" xml:space="preserve">
+    <value>Scope search to this namespace</value>
   </data>
   <data name="Search" xml:space="preserve">
     <value>Search...</value>
@@ -875,6 +946,9 @@ Do you want to continue?</value>
   <data name="TabSize" xml:space="preserve">
     <value>Tab size:</value>
   </data>
+  <data name="Theme" xml:space="preserve">
+    <value>Theme</value>
+  </data>
   <data name="ToggleFolding" xml:space="preserve">
     <value>Toggle All Folding</value>
   </data>
@@ -898,6 +972,9 @@ Do you want to continue?</value>
   </data>
   <data name="UseLogicOperationSugar" xml:space="preserve">
     <value>UseLogicOperationSugar</value>
+  </data>
+  <data name="UseNestedNamespaceNodes" xml:space="preserve">
+    <value>Use nested namespace structure</value>
   </data>
   <data name="UseTabsInsteadOfSpaces" xml:space="preserve">
     <value>Use tabs instead of spaces</value>
@@ -961,6 +1038,9 @@ Do you want to continue?</value>
   </data>
   <data name="_CollapseTreeNodes" xml:space="preserve">
     <value>_Collapse all tree nodes</value>
+  </data>
+  <data name="_CreateDiagram" xml:space="preserve">
+    <value>Create _Diagram...</value>
   </data>
   <data name="_File" xml:space="preserve">
     <value>_File</value>

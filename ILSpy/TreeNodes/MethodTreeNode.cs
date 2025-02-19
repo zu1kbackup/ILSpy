@@ -17,6 +17,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 using System;
+using System.Reflection.Metadata;
 using System.Windows.Media;
 
 using ICSharpCode.Decompiler;
@@ -24,6 +25,7 @@ using ICSharpCode.Decompiler;
 namespace ICSharpCode.ILSpy.TreeNodes
 {
 	using ICSharpCode.Decompiler.TypeSystem;
+	using ICSharpCode.ILSpyX;
 
 	/// <summary>
 	/// Tree Node representing a field, method, property, or event.
@@ -37,14 +39,21 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			this.MethodDefinition = method ?? throw new ArgumentNullException(nameof(method));
 		}
 
-		public override object Text => GetText(MethodDefinition, Language) + MethodDefinition.MetadataToken.ToSuffixString();
+		public override object Text => GetText(GetMethodDefinition(), Language) + GetSuffixString(MethodDefinition);
+
+		private IMethod GetMethodDefinition()
+		{
+			return ((MetadataModule)MethodDefinition.ParentModule?.MetadataFile
+				?.GetTypeSystemWithCurrentOptionsOrNull(SettingsService)
+				?.MainModule)?.GetDefinition((MethodDefinitionHandle)MethodDefinition.MetadataToken) ?? MethodDefinition;
+		}
 
 		public static object GetText(IMethod method, Language language)
 		{
 			return language.MethodToString(method, false, false, false);
 		}
 
-		public override object Icon => GetIcon(MethodDefinition);
+		public override object Icon => GetIcon(GetMethodDefinition());
 
 		public static ImageSource GetIcon(IMethod method)
 		{
@@ -90,11 +99,11 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			language.DecompileMethod(MethodDefinition, output, options);
 		}
 
-		public override FilterResult Filter(FilterSettings settings)
+		public override FilterResult Filter(LanguageSettings settings)
 		{
 			if (settings.ShowApiLevel == ApiVisibility.PublicOnly && !IsPublicAPI)
 				return FilterResult.Hidden;
-			if (settings.SearchTermMatches(MethodDefinition.Name) && (settings.ShowApiLevel == ApiVisibility.All || settings.Language.ShowMember(MethodDefinition)))
+			if (settings.SearchTermMatches(MethodDefinition.Name) && (settings.ShowApiLevel == ApiVisibility.All || LanguageService.Language.ShowMember(MethodDefinition)))
 				return FilterResult.Match;
 			else
 				return FilterResult.Hidden;
@@ -102,7 +111,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 
 		public override bool IsPublicAPI {
 			get {
-				switch (MethodDefinition.Accessibility)
+				switch (GetMethodDefinition().Accessibility)
 				{
 					case Accessibility.Public:
 					case Accessibility.Protected:
@@ -118,7 +127,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 
 		public override string ToString()
 		{
-			return Languages.ILLanguage.MethodToString(MethodDefinition, false, false, false);
+			return LanguageService.ILLanguage.MethodToString(MethodDefinition, false, false, false);
 		}
 	}
 }

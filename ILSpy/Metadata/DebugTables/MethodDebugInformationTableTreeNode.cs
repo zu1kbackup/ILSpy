@@ -16,9 +16,7 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-using System;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Text;
@@ -31,17 +29,10 @@ namespace ICSharpCode.ILSpy.Metadata
 {
 	internal class MethodDebugInformationTableTreeNode : DebugMetadataTableTreeNode
 	{
-		private readonly bool isEmbedded;
-
-		public MethodDebugInformationTableTreeNode(PEFile module, MetadataReader metadata, bool isEmbedded)
-			: base(HandleKind.MethodDebugInformation, module, metadata)
+		public MethodDebugInformationTableTreeNode(MetadataFile metadataFile)
+			: base(TableIndex.MethodDebugInformation, metadataFile)
 		{
-			this.isEmbedded = isEmbedded;
 		}
-
-		public override object Text => $"31 MethodDebugInformation ({metadata.GetTableRowCount(TableIndex.MethodDebugInformation)})";
-
-		public override object Icon => Images.Literal;
 
 		public override bool View(ViewModels.TabPageModel tabPage)
 		{
@@ -52,9 +43,9 @@ namespace ICSharpCode.ILSpy.Metadata
 			var list = new List<MethodDebugInformationEntry>();
 			MethodDebugInformationEntry scrollTargetEntry = default;
 
-			foreach (var row in metadata.MethodDebugInformation)
+			foreach (var row in metadataFile.Metadata.MethodDebugInformation)
 			{
-				MethodDebugInformationEntry entry = new MethodDebugInformationEntry(module, metadata, isEmbedded, row);
+				MethodDebugInformationEntry entry = new MethodDebugInformationEntry(metadataFile, row);
 				if (entry.RID == scrollTarget)
 				{
 					scrollTargetEntry = entry;
@@ -66,7 +57,7 @@ namespace ICSharpCode.ILSpy.Metadata
 
 			tabPage.Content = view;
 
-			if (scrollTargetEntry.RID > 1)
+			if (scrollTargetEntry.RID > 0)
 			{
 				ScrollItemIntoView(view, scrollTargetEntry);
 			}
@@ -77,28 +68,34 @@ namespace ICSharpCode.ILSpy.Metadata
 		struct MethodDebugInformationEntry
 		{
 			readonly int? offset;
-			readonly PEFile module;
-			readonly MetadataReader metadata;
+			readonly MetadataFile metadataFile;
 			readonly MethodDebugInformationHandle handle;
 			readonly MethodDebugInformation debugInfo;
 
 			public int RID => MetadataTokens.GetRowNumber(handle);
 
+			public int Token => MetadataTokens.GetToken(handle);
+
 			public object Offset => offset == null ? "n/a" : (object)offset;
 
-			[StringFormat("X8")]
+			[ColumnInfo("X8", Kind = ColumnKind.Token)]
 			public int Document => MetadataTokens.GetToken(debugInfo.Document);
+
+			public void OnDocumentClick()
+			{
+				MessageBus.Send(this, new NavigateToReferenceEventArgs(new EntityReference(metadataFile, debugInfo.Document, protocol: "metadata")));
+			}
 
 			public string DocumentTooltip {
 				get {
 					if (debugInfo.Document.IsNil)
 						return null;
-					var document = metadata.GetDocument(debugInfo.Document);
-					return $"{MetadataTokens.GetHeapOffset(document.Name):X} \"{metadata.GetString(document.Name)}\"";
+					var document = metadataFile.Metadata.GetDocument(debugInfo.Document);
+					return $"{MetadataTokens.GetHeapOffset(document.Name):X} \"{metadataFile.Metadata.GetString(document.Name)}\"";
 				}
 			}
 
-			[StringFormat("X")]
+			[ColumnInfo("X8", Kind = ColumnKind.HeapOffset)]
 			public int SequencePoints => MetadataTokens.GetHeapOffset(debugInfo.SequencePointsBlob);
 
 			public string SequencePointsTooltip {
@@ -114,17 +111,22 @@ namespace ICSharpCode.ILSpy.Metadata
 				}
 			}
 
-			[StringFormat("X")]
+			[ColumnInfo("X8", Kind = ColumnKind.Token)]
 			public int LocalSignature => MetadataTokens.GetToken(debugInfo.LocalSignature);
+
+			public void OnLocalSignatureClick()
+			{
+				MessageBus.Send(this, new NavigateToReferenceEventArgs(new EntityReference(metadataFile, debugInfo.LocalSignature, protocol: "metadata")));
+			}
 
 			public string LocalSignatureTooltip {
 				get {
 					if (debugInfo.LocalSignature.IsNil)
 						return null;
 					ITextOutput output = new PlainTextOutput();
-					var context = new Decompiler.Metadata.GenericContext(default(TypeDefinitionHandle), metadata);
-					StandaloneSignature localSignature = module.Metadata.GetStandaloneSignature(debugInfo.LocalSignature);
-					var signatureDecoder = new DisassemblerSignatureTypeProvider(module, output);
+					var context = new MetadataGenericContext(default(TypeDefinitionHandle), metadataFile.Metadata);
+					StandaloneSignature localSignature = metadataFile.Metadata.GetStandaloneSignature(debugInfo.LocalSignature);
+					var signatureDecoder = new DisassemblerSignatureTypeProvider(metadataFile, output);
 					int index = 0;
 					foreach (var item in localSignature.DecodeLocalSignature(signatureDecoder, context))
 					{
@@ -138,20 +140,14 @@ namespace ICSharpCode.ILSpy.Metadata
 				}
 			}
 
-			public MethodDebugInformationEntry(PEFile module, MetadataReader metadata, bool isEmbedded, MethodDebugInformationHandle handle)
+			public MethodDebugInformationEntry(MetadataFile metadataFile, MethodDebugInformationHandle handle)
 			{
-				this.offset = isEmbedded ? null : (int?)metadata.GetTableMetadataOffset(TableIndex.MethodDebugInformation)
-					+ metadata.GetTableRowSize(TableIndex.MethodDebugInformation) * (MetadataTokens.GetRowNumber(handle) - 1);
-				this.module = module;
-				this.metadata = metadata;
+				this.metadataFile = metadataFile;
+				this.offset = metadataFile.IsEmbedded ? null : (int?)metadataFile.Metadata.GetTableMetadataOffset(TableIndex.MethodDebugInformation)
+					+ metadataFile.Metadata.GetTableRowSize(TableIndex.MethodDebugInformation) * (MetadataTokens.GetRowNumber(handle) - 1);
 				this.handle = handle;
-				this.debugInfo = metadata.GetMethodDebugInformation(handle);
+				this.debugInfo = metadataFile.Metadata.GetMethodDebugInformation(handle);
 			}
-		}
-
-		public override void Decompile(Language language, ITextOutput output, DecompilationOptions options)
-		{
-			language.WriteCommentLine(output, "MethodDebugInformation");
 		}
 	}
 }

@@ -17,6 +17,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 using System;
+using System.Reflection.Metadata;
 using System.Windows.Media;
 
 using ICSharpCode.Decompiler;
@@ -24,6 +25,7 @@ using ICSharpCode.Decompiler;
 namespace ICSharpCode.ILSpy.TreeNodes
 {
 	using ICSharpCode.Decompiler.TypeSystem;
+	using ICSharpCode.ILSpyX;
 
 	/// <summary>
 	/// Represents a field in the TreeView.
@@ -37,14 +39,21 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			this.FieldDefinition = field ?? throw new ArgumentNullException(nameof(field));
 		}
 
-		public override object Text => GetText(FieldDefinition, Language) + FieldDefinition.MetadataToken.ToSuffixString();
+		public override object Text => GetText(GetFieldDefinition(), Language) + GetSuffixString(FieldDefinition);
+
+		private IField GetFieldDefinition()
+		{
+			return ((MetadataModule)FieldDefinition.ParentModule?.MetadataFile
+				?.GetTypeSystemWithCurrentOptionsOrNull(SettingsService)
+				?.MainModule)?.GetDefinition((FieldDefinitionHandle)FieldDefinition.MetadataToken) ?? FieldDefinition;
+		}
 
 		public static object GetText(IField field, Language language)
 		{
 			return language.FieldToString(field, includeDeclaringTypeName: false, includeNamespace: false, includeNamespaceOfDeclaringTypeName: false);
 		}
 
-		public override object Icon => GetIcon(FieldDefinition);
+		public override object Icon => GetIcon(GetFieldDefinition());
 
 		public static ImageSource GetIcon(IField field)
 		{
@@ -60,11 +69,11 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			return Images.GetIcon(MemberIcon.Field, MethodTreeNode.GetOverlayIcon(field.Accessibility), field.IsStatic);
 		}
 
-		public override FilterResult Filter(FilterSettings settings)
+		public override FilterResult Filter(LanguageSettings settings)
 		{
 			if (settings.ShowApiLevel == ApiVisibility.PublicOnly && !IsPublicAPI)
 				return FilterResult.Hidden;
-			if (settings.SearchTermMatches(FieldDefinition.Name) && (settings.ShowApiLevel == ApiVisibility.All || settings.Language.ShowMember(FieldDefinition)))
+			if (settings.SearchTermMatches(FieldDefinition.Name) && (settings.ShowApiLevel == ApiVisibility.All || LanguageService.Language.ShowMember(FieldDefinition)))
 				return FilterResult.Match;
 			else
 				return FilterResult.Hidden;
@@ -77,7 +86,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 
 		public override bool IsPublicAPI {
 			get {
-				switch (FieldDefinition.Accessibility)
+				switch (GetFieldDefinition().Accessibility)
 				{
 					case Accessibility.Public:
 					case Accessibility.Protected:

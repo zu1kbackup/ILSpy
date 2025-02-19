@@ -21,7 +21,8 @@ using System.Collections.Generic;
 using System.Linq;
 
 using ICSharpCode.Decompiler;
-using ICSharpCode.TreeView;
+using ICSharpCode.ILSpyX;
+using ICSharpCode.ILSpyX.TreeView;
 
 namespace ICSharpCode.ILSpy.TreeNodes
 {
@@ -66,7 +67,8 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			}
 			foreach (var entry in root.Entries.OrderBy(e => e.Name))
 			{
-				if (entry.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+				if (entry.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+					|| entry.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
 				{
 					var asm = root.ResolveFileName(entry.Name);
 					if (asm != null)

@@ -34,6 +34,10 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty.InitializerTests
 		public static void Add<T>(this IList<KeyValuePair<string, string>> collection, string key, T value, Func<T, string> convert = null)
 		{
 		}
+
+		public static void Add(this TestCases collection, string key)
+		{
+		}
 	}
 
 	public class TestCases
@@ -231,6 +235,19 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty.InitializerTests
 		{
 			int Property { get; set; }
 		}
+
+#if CS90
+		public class Issue3392Type
+		{
+			public bool Flag { get; init; }
+			public List<int> List { get; } = new List<int>();
+
+			public Issue3392Type(object x)
+			{
+
+			}
+		}
+#endif
 		#endregion
 
 		private S s1;
@@ -376,12 +393,15 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty.InitializerTests
 			{ 1, 1, 1 }
 		};
 
-#if CS73
+#if CS73 && !NET40
 		public static ReadOnlySpan<byte> StaticData1 => new byte[1] { 0 };
 
 		public static ReadOnlySpan<byte> StaticData3 => new byte[3] { 1, 2, 3 };
 
 		public static Span<byte> StaticData3Span => new byte[3] { 1, 2, 3 };
+#endif
+#if CS110 && !NET40
+		public static ReadOnlySpan<byte> UTF8Literal => "Hello, world!"u8;
 #endif
 		#endregion
 
@@ -677,6 +697,15 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty.InitializerTests
 			X(Y(), array);
 		}
 
+		public int[] IndicesInWrongOrderConstantsFull()
+		{
+			int[] array = new int[3];
+			array[0] = 0;
+			array[2] = 1;
+			array[1] = 2;
+			return array;
+		}
+
 		public static byte[] ReverseInitializer(int i)
 		{
 			byte[] array = new byte[4];
@@ -723,6 +752,13 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty.InitializerTests
 				{ "test", null, "hello", "world" },
 				{ null, "test", "hello", "world" }
 			};
+		}
+
+		private static void OutOfMemory()
+		{
+			byte[] array = new byte[int.MaxValue];
+			array[0] = 1;
+			Console.WriteLine(array.Length);
 		}
 		#endregion
 
@@ -987,6 +1023,17 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty.InitializerTests
 			otherItem.Data2.Nullable = 3m;
 			return otherItem;
 		}
+
+#if CS90
+		public Issue3392Type Issue3392(Issue3392Type x)
+		{
+			x = new Issue3392Type(null) {
+				Flag = false
+			};
+			x.List.AddRange(Enumerable.Range(0, 10));
+			return x;
+		}
+#endif
 #if CS60
 		public OtherItem2 Issue1345c()
 		{
@@ -1083,6 +1130,14 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty.InitializerTests
 			CustomList<int> customList = new CustomList<int>();
 			customList.Add<int>("int");
 			Console.WriteLine(customList);
+		}
+
+		public static TestCases NoCollectionInitializerBecauseOfMissingIEnumerable()
+		{
+			TestCases testCases = new TestCases();
+			testCases.Add("int");
+			testCases.Add("string");
+			return testCases;
 		}
 
 		public static void CollectionInitializerWithParamsMethod()

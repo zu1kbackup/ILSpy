@@ -58,10 +58,10 @@ namespace ICSharpCode.Decompiler.CSharp
 
 		void CollectNamespaces(IEntity entity, MetadataModule module, CodeMappingInfo mappingInfo = null)
 		{
-			if (entity == null || entity.MetadataToken.IsNil)
+			if (entity == null || entity.MetadataToken.IsNil || module.MetadataFile is not MetadataFile corFile)
 				return;
 			if (mappingInfo == null)
-				mappingInfo = CSharpDecompiler.GetCodeMappingInfo(entity.ParentModule.PEFile, entity.MetadataToken);
+				mappingInfo = CSharpDecompiler.GetCodeMappingInfo(corFile, entity.MetadataToken);
 			switch (entity)
 			{
 				case ITypeDefinition td:
@@ -104,7 +104,6 @@ namespace ICSharpCode.Decompiler.CSharp
 					CollectNamespacesForTypeReference(field.ReturnType);
 					break;
 				case IMethod method:
-					var reader = module.PEFile.Reader;
 					var parts = mappingInfo.GetMethodParts((MethodDefinitionHandle)method.MetadataToken).ToList();
 					foreach (var part in parts)
 					{
@@ -125,7 +124,7 @@ namespace ICSharpCode.Decompiler.CSharp
 							MethodBodyBlock body;
 							try
 							{
-								body = reader.GetMethodBody(methodDef.RelativeVirtualAddress);
+								body = module.MetadataFile.GetMethodBody(methodDef.RelativeVirtualAddress);
 							}
 							catch (BadImageFormatException)
 							{
@@ -137,11 +136,13 @@ namespace ICSharpCode.Decompiler.CSharp
 					break;
 				case IProperty property:
 					HandleAttributes(property.GetAttributes());
+					CollectNamespacesForTypeReference(property.ReturnType);
 					CollectNamespaces(property.Getter, module, mappingInfo);
 					CollectNamespaces(property.Setter, module, mappingInfo);
 					break;
 				case IEvent @event:
 					HandleAttributes(@event.GetAttributes());
+					CollectNamespacesForTypeReference(@event.ReturnType);
 					CollectNamespaces(@event.AddAccessor, module, mappingInfo);
 					CollectNamespaces(@event.RemoveAccessor, module, mappingInfo);
 					break;
@@ -302,7 +303,15 @@ namespace ICSharpCode.Decompiler.CSharp
 					case OperandType.Sig:
 					case OperandType.Tok:
 					case OperandType.Type:
-						var handle = MetadataTokenHelpers.EntityHandleOrNil(instructions.ReadInt32());
+						EntityHandle handle;
+						try
+						{
+							handle = MetadataTokenHelpers.EntityHandleOrNil(instructions.ReadInt32());
+						}
+						catch (BadImageFormatException)
+						{
+							return;
+						}
 						if (handle.IsNil)
 							break;
 						switch (handle.Kind)

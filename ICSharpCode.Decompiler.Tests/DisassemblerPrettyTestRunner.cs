@@ -47,26 +47,39 @@ namespace ICSharpCode.Decompiler.Tests
 				if (file.Extension.Equals(".il", StringComparison.OrdinalIgnoreCase))
 				{
 					var testName = file.Name.Split('.')[0];
-					Assert.Contains(testName, testNames);
+					Assert.That(testNames, Has.Member(testName));
 				}
 			}
 		}
 
 		[Test]
-		public void SecurityDeclarations()
+		public async Task SecurityDeclarations()
 		{
-			Run();
+			await Run();
 		}
 
-		void Run([CallerMemberName] string testName = null)
+		[Test]
+		public async Task SortMembers()
 		{
-			var ilExpectedFile = Path.Combine(TestCasePath, testName + ".il");
+			await Run(ilExpectedFile: Path.Combine(TestCasePath, "SortMembers.expected.il"), asmOptions: AssemblerOptions.SortedOutput);
+		}
+
+		[Test]
+		public async Task InterfaceImplAttributes()
+		{
+			await Run();
+		}
+
+		async Task Run([CallerMemberName] string testName = null, string ilExpectedFile = null, AssemblerOptions asmOptions = AssemblerOptions.None)
+		{
+			var ilInputFile = Path.Combine(TestCasePath, testName + ".il");
+			ilExpectedFile ??= ilInputFile;
 			var ilResultFile = Path.Combine(TestCasePath, testName + ".result.il");
 
-			var executable = Tester.AssembleIL(ilExpectedFile, AssemblerOptions.Library);
-			var disassembled = Tester.Disassemble(executable, ilResultFile, AssemblerOptions.UseOwnDisassembler);
+			var executable = await Tester.AssembleIL(ilInputFile, AssemblerOptions.Library).ConfigureAwait(false);
+			var disassembled = await Tester.Disassemble(executable, ilResultFile, AssemblerOptions.UseOwnDisassembler | asmOptions).ConfigureAwait(false);
 
-			CodeAssert.FilesAreEqual(ilExpectedFile, ilResultFile);
+			CodeAssert.FilesAreEqual(ilExpectedFile, disassembled);
 		}
 	}
 }

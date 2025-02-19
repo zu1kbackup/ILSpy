@@ -2,7 +2,6 @@
 <Project>
   <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.props" />
 
-
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <RootNamespace>ICSharpCode.ILSpy.AddIn</RootNamespace>
@@ -19,6 +18,10 @@
 
     <SignAssembly>True</SignAssembly>
     <AssemblyOriginatorKeyFile>Key.snk</AssemblyOriginatorKeyFile>
+    <NoWarn>
+      MSB3277;<!-- this is due to Visual Studio package references weirdness, see https://github.com/dotnet/roslyn/discussions/49787 -->
+      VSSDK1009
+    </NoWarn>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
@@ -31,35 +34,27 @@
     <DebugSymbols>true</DebugSymbols>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(AppVeyor)' != ''">
-    <DeployExtension>False</DeployExtension>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
   </PropertyGroup>
 
   <ItemGroup>
-    <Reference Include="Microsoft.CSharp" />
-    <Reference Include="System.Design" />
-  </ItemGroup>
-
-  <Import Project="..\packages.props" />
-
-  <ItemGroup>
     <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.0.31902.203" />
-    <!-- Intentionally using an old Roslyn version in the AddIn, so that we stay compatible with old VS versions. -->
-    <PackageReference Include="Microsoft.CodeAnalysis" Version="2.4.0" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="2.4.0" />
-    <PackageReference Include="Microsoft.VisualStudio.LanguageServices" Version="2.4.0" />
-    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.0.5232">
+    <PackageReference Include="Microsoft.CodeAnalysis" Version="4.0.1" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.0.1" />
+    <PackageReference Include="Microsoft.VisualStudio.LanguageServices" Version="4.0.1" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.6.2164">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Mono.Cecil" Version="$(MonoCecilVersion)" />
+    <PackageReference Include="Mono.Cecil" Version="0.11.5" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ILSpy\ILSpy.csproj">
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-      <Private>false</Private>
-    </ProjectReference>
+    <PackageReference Include="TunnelVisionLabs.ReferenceAssemblyAnnotator" Version="1.0.0-alpha.160" PrivateAssets="all" />
+
+    <!-- Specifies the version of Microsoft.NETCore.App.Ref to obtain nullability information from. -->
+    <PackageDownload Include="Microsoft.NETCore.App.Ref" Version="[8.0.0]" />
   </ItemGroup>
 
   <ItemGroup>
@@ -75,40 +70,36 @@
     <Compile Include="..\ICSharpCode.Decompiler\Metadata\LightJson\Serialization\TextScanner.cs" Link="Decompiler\LightJson\Serialization\TextScanner.cs" />
     <Compile Include="..\ICSharpCode.Decompiler\Metadata\UniversalAssemblyResolver.cs" Link="UniversalAssemblyResolver.cs" />
     <Compile Include="..\ICSharpCode.Decompiler\Util\EmptyList.cs" Link="Decompiler\EmptyList.cs" />
-    <Compile Include="..\ICSharpCode.Decompiler\Util\NullAttributes.cs" Link="NullAttributes.cs" />
-    <Compile Include="..\ILSpy\NativeMethods.cs" Link="NativeMethods.cs" />
     <Compile Include="Decompiler\Dummy.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
 
-  <!--
-  BEGIN WORKAROUND:
-  Nuget packages do not get added to the vsix automatically.
-  (related to https://github.com/icsharpcode/ILSpy/issues/511)
-  -->
   <PropertyGroup>
-    <ILSpyBuildPath>..\ILSpy\bin\$(Configuration)\$(TargetFramework)\</ILSpyBuildPath>
+    <ILSpyBuildPathX64>..\ILSpy\bin\$(Configuration)\net8.0-windows\win-x64\publish\fwdependent\</ILSpyBuildPathX64>
+    <ILSpyBuildPathArm64>..\ILSpy\bin\$(Configuration)\net8.0-windows\win-arm64\publish\fwdependent\</ILSpyBuildPathArm64>
   </PropertyGroup>
+
+  <Target Name="IncludeILSpyDistributionInVSIXSubFolder" AfterTargets="ResolveProjectReferences">
+    <ItemGroup>
+      <VSIXSourceItem Include="$(ILSpyBuildPathX64)zh-Hans\ILSpy.resources.dll;$(ILSpyBuildPathX64)zh-Hans\ILSpy.ReadyToRun.Plugin.resources.dll;">
+        <VSIXSubPath>\x64\ILSpy\zh-Hans\</VSIXSubPath>
+      </VSIXSourceItem>
+      <VSIXSourceItem Include="$(ILSpyBuildPathX64)*.dll;$(ILSpyBuildPathX64)ILSpy.exe;$(ILSpyBuildPathX64)*.json">
+        <VSIXSubPath>\x64\ILSpy</VSIXSubPath>
+      </VSIXSourceItem>
+      <VSIXSourceItem Include="$(ILSpyBuildPathArm64)zh-Hans\ILSpy.resources.dll;$(ILSpyBuildPathArm64)zh-Hans\ILSpy.ReadyToRun.Plugin.resources.dll;">
+        <VSIXSubPath>\arm64\ILSpy\zh-Hans\</VSIXSubPath>
+      </VSIXSourceItem>
+      <VSIXSourceItem Include="$(ILSpyBuildPathArm64)*.dll;$(ILSpyBuildPathArm64)ILSpy.exe;$(ILSpyBuildPathArm64)*.json">
+        <VSIXSubPath>\arm64\ILSpy</VSIXSubPath>
+      </VSIXSourceItem>
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <Content Include="$(OutputPath)Mono.Cecil.dll">
       <IncludeInVSIX>true</IncludeInVSIX>
       <VSIXSubPath>\</VSIXSubPath>
-    </Content>
-  </ItemGroup>
-  <!-- END WORKAROUND -->
-
-  <ItemGroup>
-    <Content Include="$(ILSpyBuildPath)*.dll;$(ILSpyBuildPath)ILSpy.exe;$(ILSpyBuildPath)ILSpy.exe.config">
-      <IncludeInVSIX>true</IncludeInVSIX>
-      <VSIXSubPath>\ILSpy</VSIXSubPath>
-    </Content>
-  </ItemGroup>
-
-  <ItemGroup>
-    <Content Include="$(ILSpyBuildPath)zh-Hans\ILSpy.resources.dll;$(ILSpyBuildPath)zh-Hans\ILSpy.ReadyToRun.Plugin.resources.dll;">
-      <IncludeInVSIX>true</IncludeInVSIX>
-      <VSIXSubPath>\ILSpy\zh-Hans\</VSIXSubPath>
     </Content>
     <Content Include="ILSpy-Large.ico">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
@@ -158,7 +149,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\doc\license.txt" Link="license.txt">
+    <Content Include="..\LICENSE" Link="license.txt">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>

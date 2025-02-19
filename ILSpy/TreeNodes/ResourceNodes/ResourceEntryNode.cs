@@ -20,8 +20,8 @@ using System;
 using System.IO;
 
 using ICSharpCode.Decompiler;
+using ICSharpCode.Decompiler.CSharp.ProjectDecompiler;
 using ICSharpCode.Decompiler.Metadata;
-using ICSharpCode.ILSpy.TextView;
 
 using Microsoft.Win32;
 
@@ -35,7 +35,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 		private readonly string key;
 		private readonly Func<Stream> openStream;
 
-		public override object Text => this.key;
+		public override object Text => Language.EscapeName(key);
 
 		public override object Icon => Images.Resource;
 
@@ -57,9 +57,9 @@ namespace ICSharpCode.ILSpy.TreeNodes
 		public static ILSpyTreeNode Create(Resource resource)
 		{
 			ILSpyTreeNode result = null;
-			foreach (var factory in App.ExportProvider.GetExportedValues<IResourceNodeFactory>())
+			foreach (var factory in ResourceNodeFactories)
 			{
-				result = factory.CreateNode(resource);
+				result = factory.CreateNode(resource) as ILSpyTreeNode;
 				if (result != null)
 					break;
 			}
@@ -80,7 +80,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 		public override bool Save(ViewModels.TabPageModel tabPage)
 		{
 			SaveFileDialog dlg = new SaveFileDialog();
-			dlg.FileName = Path.GetFileName(DecompilerTextView.CleanUpName(key));
+			dlg.FileName = Path.GetFileName(WholeProjectDecompiler.SanitizeFileName(key));
 			if (dlg.ShowDialog() == true)
 			{
 				using var data = OpenStream();

@@ -18,7 +18,6 @@
 
 using System;
 using System.Linq;
-using System.Reflection;
 using System.Windows.Media;
 
 using ICSharpCode.Decompiler;
@@ -28,6 +27,8 @@ using SRM = System.Reflection.Metadata;
 namespace ICSharpCode.ILSpy.TreeNodes
 {
 	using ICSharpCode.Decompiler.TypeSystem;
+	using ICSharpCode.ILSpyX;
+
 	public sealed class TypeTreeNode : ILSpyTreeNode, IMemberTreeNode
 	{
 		public TypeTreeNode(ITypeDefinition typeDefinition, AssemblyTreeNode parentAssemblyNode)
@@ -41,12 +42,20 @@ namespace ICSharpCode.ILSpy.TreeNodes
 
 		public AssemblyTreeNode ParentAssemblyNode { get; }
 
-		public override object Text => this.Language.TypeToString(TypeDefinition, includeNamespace: false)
-			+ TypeDefinition.MetadataToken.ToSuffixString();
+		public override object Text => this.Language.TypeToString(GetTypeDefinition(), includeNamespace: false)
+			+ GetSuffixString(TypeDefinition.MetadataToken);
+
+		private ITypeDefinition GetTypeDefinition()
+		{
+			return ((MetadataModule)ParentAssemblyNode.LoadedAssembly
+				.GetMetadataFileOrNull()
+				?.GetTypeSystemWithCurrentOptionsOrNull(SettingsService)
+				?.MainModule)?.GetDefinition((SRM.TypeDefinitionHandle)TypeDefinition.MetadataToken);
+		}
 
 		public override bool IsPublicAPI {
 			get {
-				switch (TypeDefinition.Accessibility)
+				switch (GetTypeDefinition().Accessibility)
 				{
 					case Accessibility.Public:
 					case Accessibility.Protected:
@@ -58,13 +67,13 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			}
 		}
 
-		public override FilterResult Filter(FilterSettings settings)
+		public override FilterResult Filter(LanguageSettings settings)
 		{
 			if (settings.ShowApiLevel == ApiVisibility.PublicOnly && !IsPublicAPI)
 				return FilterResult.Hidden;
 			if (settings.SearchTermMatches(TypeDefinition.Name))
 			{
-				if (settings.ShowApiLevel == ApiVisibility.All || settings.Language.ShowMember(TypeDefinition))
+				if (settings.ShowApiLevel == ApiVisibility.All || LanguageService.Language.ShowMember(TypeDefinition))
 					return FilterResult.Match;
 				else
 					return FilterResult.Hidden;
@@ -78,7 +87,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 		protected override void LoadChildren()
 		{
 			if (TypeDefinition.DirectBaseTypes.Any())
-				this.Children.Add(new BaseTypesTreeNode(ParentAssemblyNode.LoadedAssembly.GetPEFileOrNull(), TypeDefinition));
+				this.Children.Add(new BaseTypesTreeNode(ParentAssemblyNode.LoadedAssembly.GetMetadataFileOrNull(), TypeDefinition));
 			if (!TypeDefinition.IsSealed)
 				this.Children.Add(new DerivedTypesTreeNode(ParentAssemblyNode.AssemblyList, TypeDefinition));
 			foreach (var nestedType in TypeDefinition.NestedTypes.OrderBy(t => t.Name, NaturalStringComparer.Instance))
@@ -120,7 +129,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 
 		public override void Decompile(Language language, ITextOutput output, DecompilationOptions options)
 		{
-			language.DecompileType(TypeDefinition, output, options);
+			language.DecompileType(GetTypeDefinition(), output, options);
 		}
 
 		public override object Icon => GetIcon(TypeDefinition);

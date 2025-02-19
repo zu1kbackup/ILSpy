@@ -193,7 +193,9 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 			catch (Exception ex)
 			{
 				await Task.Delay(0);
+#pragma warning disable CA2200 // Rethrow to preserve stack details
 				throw ex;
+#pragma warning restore CA2200 // Rethrow to preserve stack details
 			}
 		}
 
@@ -248,7 +250,7 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 			{
 				throw null;
 			}
-			catch (Exception ex2) when (i == 0)
+			catch (Exception ex) when (i == 0)
 			{
 				Console.WriteLine("First!");
 				if (i == 1)
@@ -256,9 +258,9 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 					throw;
 				}
 				await Task.Yield();
-				Console.WriteLine(ex2.StackTrace);
+				Console.WriteLine(ex.StackTrace);
 			}
-			catch (Exception ex3) when (True())
+			catch (Exception ex2) when (True())
 			{
 				Console.WriteLine("Second!");
 				if (i == 1)
@@ -266,9 +268,9 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 					throw;
 				}
 				await Task.Yield();
-				Console.WriteLine(ex3.StackTrace);
+				Console.WriteLine(ex2.StackTrace);
 			}
-			catch (Exception ex)
+			catch (Exception ex3)
 			{
 				Console.WriteLine("Third!");
 				if (i == 1)
@@ -276,7 +278,7 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 					throw;
 				}
 				await Task.Yield();
-				Console.WriteLine(ex.StackTrace);
+				Console.WriteLine(ex3.StackTrace);
 			}
 			catch when (i == 0)
 			{
@@ -339,6 +341,23 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 			{
 				await Task.CompletedTask;
 			}
+		}
+
+		public async Task<object> Issue2436()
+		{
+			try
+			{
+				Console.WriteLine();
+			}
+			catch (Exception result)
+			{
+				return result;
+			}
+			finally
+			{
+				await Task.CompletedTask;
+			}
+			return new object();
 		}
 #endif
 

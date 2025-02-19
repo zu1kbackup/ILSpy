@@ -19,7 +19,11 @@
 using System;
 using System.Threading;
 
+using ICSharpCode.Decompiler;
 using ICSharpCode.ILSpy.Options;
+using ICSharpCode.ILSpyX;
+
+using DecompilerSettings = ICSharpCode.ILSpy.Options.DecompilerSettings;
 
 namespace ICSharpCode.ILSpy
 {
@@ -55,9 +59,17 @@ namespace ICSharpCode.ILSpy
 		public CancellationToken CancellationToken { get; set; }
 
 		/// <summary>
+		/// Gets the progress reporter.
+		/// </summary>
+		/// <remarks>
+		/// If decompilers do not implement progress reporting, an indeterminate wait bar is displayed.
+		/// </remarks>
+		public IProgress<DecompilationProgress> Progress { get; set; }
+
+		/// <summary>
 		/// Gets the settings for the decompiler.
 		/// </summary>
-		public Decompiler.DecompilerSettings DecompilerSettings { get; private set; }
+		public DecompilerSettings DecompilerSettings { get; private set; }
 
 		/// <summary>
 		/// Gets/sets an optional state of a decompiler text view.
@@ -73,21 +85,13 @@ namespace ICSharpCode.ILSpy
 		internal int StepLimit = int.MaxValue;
 		internal bool IsDebug = false;
 
-		public DecompilationOptions()
-			: this(MainWindow.Instance.CurrentLanguageVersion, DecompilerSettingsPanel.CurrentDecompilerSettings, DisplaySettingsPanel.CurrentDisplaySettings)
-		{
-		}
-
-		public DecompilationOptions(LanguageVersion version)
-			: this(version, DecompilerSettingsPanel.CurrentDecompilerSettings, DisplaySettingsPanel.CurrentDisplaySettings)
-		{
-		}
-
-		public DecompilationOptions(LanguageVersion version, Decompiler.DecompilerSettings settings, Options.DisplaySettings displaySettings)
+		public DecompilationOptions(LanguageVersion version, DecompilerSettings settings, DisplaySettings displaySettings)
 		{
 			if (!Enum.TryParse(version?.Version, out Decompiler.CSharp.LanguageVersion languageVersion))
 				languageVersion = Decompiler.CSharp.LanguageVersion.Latest;
+
 			var newSettings = this.DecompilerSettings = settings.Clone();
+
 			newSettings.SetLanguageVersion(languageVersion);
 			newSettings.ExpandMemberDefinitions = displaySettings.ExpandMemberDefinitions;
 			newSettings.ExpandUsingDeclarations = displaySettings.ExpandUsingDeclarations;

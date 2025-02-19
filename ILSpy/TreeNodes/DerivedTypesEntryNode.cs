@@ -17,14 +17,15 @@
 // DEALINGS IN THE SOFTWARE.
 
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 
 using ICSharpCode.Decompiler;
+using ICSharpCode.ILSpyX;
 
 namespace ICSharpCode.ILSpy.TreeNodes
 {
 	using ICSharpCode.Decompiler.TypeSystem;
+	using ICSharpCode.ILSpyX.TreeView.PlatformAbstractions;
 
 	class DerivedTypesEntryNode : ILSpyTreeNode, IMemberTreeNode
 	{
@@ -43,18 +44,18 @@ namespace ICSharpCode.ILSpy.TreeNodes
 		public override bool ShowExpander => !type.IsSealed && base.ShowExpander;
 
 		public override object Text {
-			get { return Language.TypeToString(type, includeNamespace: true) + type.MetadataToken.ToSuffixString(); }
+			get { return Language.TypeToString(type, includeNamespace: true) + GetSuffixString(type.MetadataToken); }
 		}
 
 		public override object Icon => TypeTreeNode.GetIcon(type);
 
-		public override FilterResult Filter(FilterSettings settings)
+		public override FilterResult Filter(LanguageSettings settings)
 		{
 			if (settings.ShowApiLevel == ApiVisibility.PublicOnly && !IsPublicAPI)
 				return FilterResult.Hidden;
 			if (settings.SearchTermMatches(type.Name))
 			{
-				if (type.DeclaringType != null && (settings.ShowApiLevel != ApiVisibility.All || !settings.Language.ShowMember(type)))
+				if (type.DeclaringType != null && (settings.ShowApiLevel != ApiVisibility.All || !LanguageService.Language.ShowMember(type)))
 					return FilterResult.Hidden;
 				else
 					return FilterResult.Match;
@@ -88,7 +89,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			return DerivedTypesTreeNode.FindDerivedTypes(list, type, ct);
 		}
 
-		public override void ActivateItem(System.Windows.RoutedEventArgs e)
+		public override void ActivateItem(IPlatformRoutedEventArgs e)
 		{
 			e.Handled = BaseTypesEntryNode.ActivateItem(this, type);
 		}

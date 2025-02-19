@@ -114,7 +114,11 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 		{
 			var ctx = new StatementTransformContext(context);
 			int pos = 0;
-			ctx.rerunPosition = block.Instructions.Count - 1;
+			if (context.IndexOfFirstAlreadyTransformedInstruction == 0)
+			{
+				return;
+			}
+			ctx.rerunPosition = context.IndexOfFirstAlreadyTransformedInstruction - 1;
 			while (pos >= 0)
 			{
 				if (ctx.rerunPosition != null)
@@ -133,7 +137,6 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				}
 				foreach (var transform in children)
 				{
-					Debug.Assert(block.HasFlag(InstructionFlags.EndPointUnreachable));
 					transform.Run(block, pos, ctx);
 #if DEBUG
 					block.Instructions[pos].CheckInvariant(ILPhase.Normal);
@@ -160,6 +163,10 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 					pos--;
 				}
 			}
+			// This invariant can be surprisingly expensive to check if the block has thousands
+			// of instructions and is frequently modified by transforms (invalidating the flags each time)
+			// so we'll check this only once at the end of the block.
+			Debug.Assert(block.HasFlag(InstructionFlags.EndPointUnreachable));
 		}
 	}
 }

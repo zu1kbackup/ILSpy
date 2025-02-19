@@ -16,35 +16,22 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-using System;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
-using System.Text;
 
-using ICSharpCode.Decompiler;
-using ICSharpCode.Decompiler.Disassembler;
-using ICSharpCode.Decompiler.IL;
 using ICSharpCode.Decompiler.Metadata;
 
 namespace ICSharpCode.ILSpy.Metadata
 {
 	internal class StateMachineMethodTableTreeNode : DebugMetadataTableTreeNode
 	{
-		readonly bool isEmbedded;
-
-		public StateMachineMethodTableTreeNode(PEFile module, MetadataReader metadata, bool isEmbedded)
-			: base((HandleKind)0x36, module, metadata)
+		public StateMachineMethodTableTreeNode(MetadataFile metadataFile)
+			: base(TableIndex.StateMachineMethod, metadataFile)
 		{
-			this.isEmbedded = isEmbedded;
 		}
 
-		public override object Text => $"36 StateMachineMethod ({metadata.GetTableRowCount(TableIndex.StateMachineMethod)})";
-
-		public override object Icon => Images.Literal;
-
-		public unsafe override bool View(ViewModels.TabPageModel tabPage)
+		public override bool View(ViewModels.TabPageModel tabPage)
 		{
 			tabPage.Title = Text.ToString();
 			tabPage.SupportsLanguageSwitching = false;
@@ -52,13 +39,13 @@ namespace ICSharpCode.ILSpy.Metadata
 			var view = Helpers.PrepareDataGrid(tabPage, this);
 			var list = new List<StateMachineMethodEntry>();
 			StateMachineMethodEntry scrollTargetEntry = default;
-			var length = metadata.GetTableRowCount(TableIndex.StateMachineMethod);
-			var reader = new BlobReader(metadata.MetadataPointer, metadata.MetadataLength);
-			reader.Offset = +metadata.GetTableMetadataOffset(TableIndex.StateMachineMethod);
+			var length = metadataFile.Metadata.GetTableRowCount(TableIndex.StateMachineMethod);
+			var reader = metadataFile.Metadata.AsBlobReader();
+			reader.Offset = metadataFile.Metadata.GetTableMetadataOffset(TableIndex.StateMachineMethod);
 
 			for (int rid = 1; rid <= length; rid++)
 			{
-				StateMachineMethodEntry entry = new StateMachineMethodEntry(module, ref reader, isEmbedded, rid);
+				StateMachineMethodEntry entry = new StateMachineMethodEntry(metadataFile, ref reader, rid);
 				if (scrollTarget == rid)
 				{
 					scrollTargetEntry = entry;
@@ -70,7 +57,7 @@ namespace ICSharpCode.ILSpy.Metadata
 
 			tabPage.Content = view;
 
-			if (scrollTargetEntry.RID > 1)
+			if (scrollTargetEntry.RID > 0)
 			{
 				ScrollItemIntoView(view, scrollTargetEntry);
 			}
@@ -81,58 +68,53 @@ namespace ICSharpCode.ILSpy.Metadata
 		struct StateMachineMethodEntry
 		{
 			readonly int? offset;
-			readonly PEFile module;
-			readonly MetadataReader metadata;
+			readonly MetadataFile metadataFile;
 			readonly MethodDefinitionHandle moveNextMethod;
 			readonly MethodDefinitionHandle kickoffMethod;
 
 			public int RID { get; }
 
+			public int Token => 0x36000000 + RID;
+
 			public object Offset => offset == null ? "n/a" : (object)offset;
 
-			[StringFormat("X8")]
+			[ColumnInfo("X8", Kind = ColumnKind.Token)]
 			public int MoveNextMethod => MetadataTokens.GetToken(moveNextMethod);
 
-			public string MoveNextMethodTooltip {
-				get {
-					ITextOutput output = new PlainTextOutput();
-					var context = new GenericContext(default(TypeDefinitionHandle), module);
-					((EntityHandle)moveNextMethod).WriteTo(module, output, context);
-					return output.ToString();
-				}
+			public void OnMoveNextMethodClick()
+			{
+				MessageBus.Send(this, new NavigateToReferenceEventArgs(new EntityReference(metadataFile, moveNextMethod, protocol: "metadata")));
 			}
 
-			[StringFormat("X8")]
+			string moveNextMethodTooltip;
+			public string MoveNextMethodTooltip => GenerateTooltip(ref moveNextMethodTooltip, metadataFile, moveNextMethod);
+
+			[ColumnInfo("X8", Kind = ColumnKind.Token)]
 			public int KickoffMethod => MetadataTokens.GetToken(kickoffMethod);
 
-			public string KickoffMethodTooltip {
-				get {
-					ITextOutput output = new PlainTextOutput();
-					var context = new GenericContext(default(TypeDefinitionHandle), module);
-					((EntityHandle)kickoffMethod).WriteTo(module, output, context);
-					return output.ToString();
-				}
+			public void OnKickofMethodClick()
+			{
+				MessageBus.Send(this, new NavigateToReferenceEventArgs(new EntityReference(metadataFile, kickoffMethod, protocol: "metadata")));
 			}
 
-			public StateMachineMethodEntry(PEFile module, ref BlobReader reader, bool isEmbedded, int row)
-			{
-				this.module = module;
-				this.metadata = module.Metadata;
-				this.RID = row;
-				int rowOffset = metadata.GetTableMetadataOffset(TableIndex.StateMachineMethod)
-					+ metadata.GetTableRowSize(TableIndex.StateMachineMethod) * (row - 1);
-				this.offset = isEmbedded ? null : (int?)rowOffset;
+			string kickoffMethodTooltip;
+			public string KickoffMethodTooltip => GenerateTooltip(ref kickoffMethodTooltip, metadataFile, kickoffMethod);
 
-				int methodDefSize = metadata.GetTableRowCount(TableIndex.MethodDef) < ushort.MaxValue ? 2 : 4;
+			public StateMachineMethodEntry(MetadataFile metadataFile, ref BlobReader reader, int row)
+			{
+				this.metadataFile = metadataFile;
+				this.RID = row;
+				int rowOffset = metadataFile.Metadata.GetTableMetadataOffset(TableIndex.StateMachineMethod)
+					+ metadataFile.Metadata.GetTableRowSize(TableIndex.StateMachineMethod) * (row - 1);
+				this.offset = metadataFile.IsEmbedded ? null : (int?)rowOffset;
+
+				int methodDefSize = metadataFile.Metadata.GetTableRowCount(TableIndex.MethodDef) < ushort.MaxValue ? 2 : 4;
 				this.moveNextMethod = MetadataTokens.MethodDefinitionHandle(methodDefSize == 2 ? reader.ReadInt16() : reader.ReadInt32());
 				this.kickoffMethod = MetadataTokens.MethodDefinitionHandle(methodDefSize == 2 ? reader.ReadInt16() : reader.ReadInt32());
+				this.kickoffMethodTooltip = null;
+				this.moveNextMethodTooltip = null;
 			}
 
-		}
-
-		public override void Decompile(Language language, ITextOutput output, DecompilationOptions options)
-		{
-			language.WriteCommentLine(output, "StateMachineMethod");
 		}
 	}
 }

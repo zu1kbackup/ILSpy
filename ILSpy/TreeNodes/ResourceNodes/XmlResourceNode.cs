@@ -17,7 +17,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 using System;
-using System.ComponentModel.Composition;
+using System.Composition;
 using System.IO;
 using System.Threading.Tasks;
 
@@ -26,15 +26,17 @@ using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.ILSpy.TextView;
 using ICSharpCode.ILSpy.TreeNodes;
 using ICSharpCode.ILSpy.ViewModels;
+using ICSharpCode.ILSpyX.Abstractions;
 
 namespace ICSharpCode.ILSpy.Xaml
 {
 	[Export(typeof(IResourceNodeFactory))]
+	[Shared]
 	sealed class XmlResourceNodeFactory : IResourceNodeFactory
 	{
 		private readonly static string[] xmlFileExtensions = { ".xml", ".xsd", ".xslt" };
 
-		public ILSpyTreeNode CreateNode(Resource resource)
+		public ITreeNode CreateNode(Resource resource)
 		{
 			string key = resource.Name;
 			foreach (string fileExt in xmlFileExtensions)

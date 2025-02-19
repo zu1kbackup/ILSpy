@@ -24,10 +24,13 @@ using System.Text;
 using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.AvalonEdit.Utils;
 using ICSharpCode.Decompiler;
+using ICSharpCode.Decompiler.CSharp.ProjectDecompiler;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.ILSpy.Properties;
 using ICSharpCode.ILSpy.TextView;
 using ICSharpCode.ILSpy.ViewModels;
+using ICSharpCode.ILSpyX;
+using ICSharpCode.ILSpyX.Abstractions;
 
 using Microsoft.Win32;
 
@@ -37,7 +40,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 	/// This is the default resource entry tree node, which is used if no specific
 	/// <see cref="IResourceNodeFactory"/> exists for the given resource type. 
 	/// </summary>
-	public class ResourceTreeNode : ILSpyTreeNode
+	public class ResourceTreeNode : ILSpyTreeNode, IResourcesFileTreeNode
 	{
 		public ResourceTreeNode(Resource r)
 		{
@@ -48,11 +51,11 @@ namespace ICSharpCode.ILSpy.TreeNodes
 
 		public Resource Resource { get; }
 
-		public override object Text => Resource.Name;
+		public override object Text => Language.EscapeName(Resource.Name);
 
 		public override object Icon => Images.Resource;
 
-		public override FilterResult Filter(FilterSettings settings)
+		public override FilterResult Filter(LanguageSettings settings)
 		{
 			if (settings.ShowApiLevel == ApiVisibility.PublicOnly && (Resource.Attributes & ManifestResourceAttributes.VisibilityMask) == ManifestResourceAttributes.Private)
 				return FilterResult.Hidden;
@@ -64,12 +67,14 @@ namespace ICSharpCode.ILSpy.TreeNodes
 
 		public override void Decompile(Language language, ITextOutput output, DecompilationOptions options)
 		{
-			language.WriteCommentLine(output, string.Format("{0} ({1}, {2})", Resource.Name, Resource.ResourceType, Resource.Attributes));
+			var sizeInBytes = Resource.TryGetLength();
+			var sizeInBytesText = sizeInBytes == null ? "" : ", " + sizeInBytes + " bytes";
+			language.WriteCommentLine(output, $"{Resource.Name} ({Resource.ResourceType}, {Resource.Attributes}{sizeInBytesText})");
 
 			ISmartTextOutput smartOutput = output as ISmartTextOutput;
 			if (smartOutput != null)
 			{
-				smartOutput.AddButton(Images.Save, Resources.Save, delegate { Save(Docking.DockWorkspace.Instance.ActiveTabPage); });
+				smartOutput.AddButton(Images.Save, Resources.Save, delegate { Save(DockWorkspace.ActiveTabPage); });
 				output.WriteLine();
 			}
 		}
@@ -91,7 +96,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 					if (type == FileType.Xml)
 						ext = ".xml";
 					else
-						ext = Path.GetExtension(DecompilerTextView.CleanUpName(Resource.Name));
+						ext = Path.GetExtension(WholeProjectDecompiler.SanitizeFileName(Resource.Name));
 					tabPage.ShowTextView(textView => textView.ShowNode(output, this, HighlightingManager.Instance.GetDefinitionByExtension(ext)));
 					tabPage.SupportsLanguageSwitching = false;
 					return true;
@@ -106,7 +111,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			if (s == null)
 				return false;
 			SaveFileDialog dlg = new SaveFileDialog();
-			dlg.FileName = DecompilerTextView.CleanUpName(Resource.Name);
+			dlg.FileName = Path.GetFileName(WholeProjectDecompiler.SanitizeFileName(Resource.Name));
 			if (dlg.ShowDialog() == true)
 			{
 				s.Position = 0;

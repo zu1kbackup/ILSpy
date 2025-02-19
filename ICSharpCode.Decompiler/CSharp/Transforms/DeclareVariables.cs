@@ -205,7 +205,11 @@ namespace ICSharpCode.Decompiler.CSharp.Transforms
 		{
 			foreach (var stmt in rootNode.DescendantsAndSelf.OfType<ExpressionStatement>())
 			{
-				if (!IsValidInStatementExpression(stmt.Expression))
+				if (stmt.Expression is DirectionExpression dir && IsValidInStatementExpression(dir.Expression))
+				{
+					stmt.Expression = dir.Expression.Detach();
+				}
+				else if (!IsValidInStatementExpression(stmt.Expression))
 				{
 					// fetch ILFunction
 					var function = stmt.Ancestors.SelectMany(a => a.Annotations.OfType<ILFunction>()).First(f => f.Parent == null);
@@ -281,7 +285,7 @@ namespace ICSharpCode.Decompiler.CSharp.Transforms
 		void FindInsertionPoints(AstNode node, int nodeLevel)
 		{
 			BlockContainer scope = node.Annotation<BlockContainer>();
-			if (scope != null && (scope.EntryPoint.IncomingEdgeCount > 1 || scope.Parent is ILFunction))
+			if (scope != null && IsRelevantScope(scope))
 			{
 				// track loops and function bodies as scopes, for comparison with CaptureScope.
 				scopeTracking.Add((new InsertionPoint { level = nodeLevel, nextNode = node }, scope));
@@ -316,9 +320,14 @@ namespace ICSharpCode.Decompiler.CSharp.Transforms
 					{
 						InsertionPoint newPoint;
 						int startIndex = scopeTracking.Count - 1;
-						if (variable.CaptureScope != null && startIndex > 0 && variable.CaptureScope != scopeTracking[startIndex].Scope)
+						BlockContainer captureScope = variable.CaptureScope;
+						while (captureScope != null && !IsRelevantScope(captureScope))
 						{
-							while (startIndex > 0 && scopeTracking[startIndex].Scope != variable.CaptureScope)
+							captureScope = BlockContainer.FindClosestContainer(captureScope.Parent);
+						}
+						if (captureScope != null && startIndex > 0 && captureScope != scopeTracking[startIndex].Scope)
+						{
+							while (startIndex > 0 && scopeTracking[startIndex].Scope != captureScope)
 								startIndex--;
 							newPoint = scopeTracking[startIndex + 1].InsertionPoint;
 						}
@@ -364,6 +373,11 @@ namespace ICSharpCode.Decompiler.CSharp.Transforms
 				if (scope != null)
 					scopeTracking.RemoveAt(scopeTracking.Count - 1);
 			}
+		}
+
+		private static bool IsRelevantScope(BlockContainer scope)
+		{
+			return scope.EntryPoint.IncomingEdgeCount > 1 || scope.Parent is ILFunction;
 		}
 
 		internal static bool VariableNeedsDeclaration(VariableKind kind)
@@ -466,6 +480,7 @@ namespace ICSharpCode.Decompiler.CSharp.Transforms
 					Debug.Assert(point1.level == point2.level);
 					if (point1.nextNode.Parent == point2.nextNode.Parent)
 					{
+						Debug.Assert(prev.Type.Equals(v.Type));
 						// We found a collision!
 						v.InvolvedInCollision = true;
 						prev.ReplacementDueToCollision = v;

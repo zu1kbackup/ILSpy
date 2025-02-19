@@ -30,7 +30,9 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Navigation;
 
 using DataGridExtensions;
 
@@ -39,6 +41,8 @@ using ICSharpCode.ILSpy.Controls;
 using ICSharpCode.ILSpy.TextView;
 using ICSharpCode.ILSpy.TreeNodes;
 using ICSharpCode.ILSpy.ViewModels;
+
+using TomsToolbox.Wpf.Interactivity;
 
 namespace ICSharpCode.ILSpy.Metadata
 {
@@ -67,6 +71,7 @@ namespace ICSharpCode.ILSpy.Metadata
 				ContextMenuProvider.Add(view);
 				DataGridFilter.SetIsAutoFilterEnabled(view, true);
 				DataGridFilter.SetContentFilterFactory(view, new RegexContentFilterFactory());
+				AdvancedScrollWheelBehavior.SetAttach(view, AdvancedScrollWheelMode.WithoutAnimation);
 			}
 			DataGridFilter.GetFilter(view).Clear();
 			view.RowDetailsTemplateSelector = null;
@@ -93,16 +98,7 @@ namespace ICSharpCode.ILSpy.Metadata
 		internal static void View_AutoGeneratingColumn(object sender, DataGridAutoGeneratingColumnEventArgs e)
 		{
 			var binding = new Binding(e.PropertyName) { Mode = BindingMode.OneWay };
-			e.Column = e.PropertyType.FullName switch {
-				"System.Boolean" => new DataGridCheckBoxColumn() {
-					Header = e.PropertyName,
-					Binding = binding
-				},
-				_ => new DataGridTextColumn() {
-					Header = e.PropertyName,
-					Binding = binding
-				}
-			};
+			e.Column = GetColumn();
 			switch (e.PropertyName)
 			{
 				case "RID":
@@ -136,6 +132,67 @@ namespace ICSharpCode.ILSpy.Metadata
 			{
 				ApplyAttributes((PropertyDescriptor)e.PropertyDescriptor, binding, e.Column);
 			}
+
+			DataGridColumn GetColumn()
+			{
+				if (e.PropertyType == typeof(bool))
+				{
+					return new DataGridCheckBoxColumn() {
+						Header = e.PropertyName,
+						SortMemberPath = e.PropertyName,
+						Binding = binding
+					};
+				}
+
+				var descriptor = (PropertyDescriptor)e.PropertyDescriptor;
+
+				if (descriptor.Attributes.OfType<ColumnInfoAttribute>().Any(c => c.Kind == ColumnKind.Token || c.LinkToTable))
+				{
+					return new DataGridTemplateColumn() {
+						Header = e.PropertyName,
+						SortMemberPath = e.PropertyName,
+						CellTemplate = GetOrCreateLinkCellTemplate(e.PropertyName, descriptor, binding)
+					};
+				}
+
+				return new DataGridTextColumn() {
+					Header = e.PropertyName,
+					SortMemberPath = e.PropertyName,
+					Binding = binding
+				};
+			}
+		}
+
+		static readonly Dictionary<string, DataTemplate> linkCellTemplates = new Dictionary<string, DataTemplate>();
+
+		private static DataTemplate GetOrCreateLinkCellTemplate(string name, PropertyDescriptor descriptor, Binding binding)
+		{
+			if (linkCellTemplates.TryGetValue(name, out var template))
+			{
+				return template;
+			}
+
+			var tb = new FrameworkElementFactory(typeof(TextBlock));
+			var hyper = new FrameworkElementFactory(typeof(Hyperlink));
+			tb.AppendChild(hyper);
+			hyper.AddHandler(Hyperlink.ClickEvent, new RoutedEventHandler(Hyperlink_Click));
+			var run = new FrameworkElementFactory(typeof(Run));
+			hyper.AppendChild(run);
+			run.SetBinding(Run.TextProperty, binding);
+
+			DataTemplate dataTemplate = new DataTemplate() { VisualTree = tb };
+			linkCellTemplates.Add(name, dataTemplate);
+			return dataTemplate;
+
+			void Hyperlink_Click(object sender, RoutedEventArgs e)
+			{
+				var hyperlink = (Hyperlink)sender;
+				var onClickMethod = descriptor.ComponentType.GetMethod("On" + name + "Click", BindingFlags.Instance | BindingFlags.Public);
+				if (onClickMethod != null)
+				{
+					onClickMethod.Invoke(hyperlink.DataContext, Array.Empty<object>());
+				}
+			}
 		}
 
 		static void ApplyAttributes(PropertyDescriptor descriptor, Binding binding, DataGridColumn column)
@@ -146,23 +203,32 @@ namespace ICSharpCode.ILSpy.Metadata
 				string key = descriptor.PropertyType.Name + "Filter";
 				column.SetTemplate((ControlTemplate)MetadataTableViews.Instance[key]);
 			}
-			var stringFormat = descriptor.Attributes.OfType<StringFormatAttribute>().FirstOrDefault();
-			if (stringFormat != null)
+			var columnInfo = descriptor.Attributes.OfType<ColumnInfoAttribute>().FirstOrDefault();
+			if (columnInfo != null)
 			{
-				binding.StringFormat = stringFormat.Format;
+				binding.StringFormat = columnInfo.Format;
 				if (!descriptor.PropertyType.IsEnum
-					&& stringFormat.Format.StartsWith("X", StringComparison.OrdinalIgnoreCase))
+					&& columnInfo.Format.StartsWith("X", StringComparison.OrdinalIgnoreCase))
 				{
 					column.SetTemplate((ControlTemplate)MetadataTableViews.Instance["HexFilter"]);
 				}
 			}
 		}
 
+		[Obsolete("Use safe GetValueLittleEndian(ReadOnlySpan<byte>) or appropriate BinaryPrimitives.Read* method")]
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public static unsafe int GetValue(byte* ptr, int size)
+			=> GetValueLittleEndian(new ReadOnlySpan<byte>(ptr, size));
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static int GetValueLittleEndian(ReadOnlySpan<byte> ptr, int size)
+			=> GetValueLittleEndian(ptr.Slice(0, size));
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static int GetValueLittleEndian(ReadOnlySpan<byte> ptr)
 		{
 			int result = 0;
-			for (int i = 0; i < size; i += 2)
+			for (int i = 0; i < ptr.Length; i += 2)
 			{
 				result |= ptr[i] << 8 * i;
 				result |= ptr[i + 1] << 8 * (i + 1);
@@ -243,11 +309,23 @@ namespace ICSharpCode.ILSpy.Metadata
 		}
 	}
 
-	class StringFormatAttribute : Attribute
+	enum ColumnKind
+	{
+		HeapOffset,
+		Token,
+		Other
+	}
+
+	[AttributeUsage(AttributeTargets.Property)]
+	class ColumnInfoAttribute : Attribute
 	{
 		public string Format { get; }
 
-		public StringFormatAttribute(string format)
+		public ColumnKind Kind { get; set; }
+
+		public bool LinkToTable { get; set; }
+
+		public ColumnInfoAttribute(string format)
 		{
 			this.Format = format;
 		}

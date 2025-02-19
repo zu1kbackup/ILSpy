@@ -37,9 +37,6 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 
 		IEnumerable<IAttribute> IParameter.GetAttributes() => baseParameter.GetAttributes();
 		ReferenceKind IParameter.ReferenceKind => baseParameter.ReferenceKind;
-		bool IParameter.IsRef => baseParameter.IsRef;
-		bool IParameter.IsOut => baseParameter.IsOut;
-		bool IParameter.IsIn => baseParameter.IsIn;
 		bool IParameter.IsParams => baseParameter.IsParams;
 		bool IParameter.IsOptional => baseParameter.IsOptional;
 		bool IParameter.HasConstantValueInSignature => baseParameter.HasConstantValueInSignature;
@@ -50,6 +47,8 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 		bool IVariable.IsConst => baseParameter.IsConst;
 		object IVariable.GetConstantValue(bool throwOnInvalidMetadata) => baseParameter.GetConstantValue(throwOnInvalidMetadata);
 		SymbolKind ISymbol.SymbolKind => SymbolKind.Parameter;
+
+		public LifetimeAnnotation Lifetime => baseParameter.Lifetime;
 
 		public override string ToString()
 		{
